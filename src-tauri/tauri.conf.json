@@ -1,0 +1,46 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Janus",
+  "version": "0.1.0",
+  "identifier": "com.solaris.janus",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Janus",
+        "width": 1360,
+        "height": 820,
+        "minWidth": 1040,
+        "minHeight": 700,
+        "center": true,
+        "decorations": false,
+        "resizable": true,
+        "maximizable": true,
+        "minimizable": true,
+        "closable": true,
+        "shadow": true,
+        "backgroundColor": "#F4F1EA"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "../assets/brand/janus-app.ico",
+      "../assets/brand/icons/janus-app-32.png",
+      "../assets/brand/icons/janus-app-128.png"
+    ],
+    "shortDescription": "越过边界，开口即世界。",
+    "longDescription": "Janus 是太阳系软件系列中的 Windows 桌面语言学习工作台。"
+  }
+}

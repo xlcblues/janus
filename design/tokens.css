@@ -1,0 +1,216 @@
+/* Janus Design Tokens — v0.1
+ * 唯一主题依据。组件不得写死颜色；所有主题切换只替换语义变量。
+ */
+:root {
+  color-scheme: light;
+
+  /* Brand primitives */
+  --janus-iris: #6a55c2;
+  --janus-iris-deep: #4b398f;
+  --janus-violet: #9a8cf5;
+  --trial-brass: #b48736;
+  --trial-brass-bright: #d6b36a;
+  --night-ink: #12111a;
+  --warm-paper: #f4f1ea;
+  --ambient-accent: rgba(106, 85, 194, 0.07);
+
+  /* Semantic surfaces */
+  --bg: #f4f1ea;
+  --bg-raised: #fbf9f4;
+  --bg-subtle: #ece7dd;
+  --surface-glass: rgba(251, 249, 244, 0.74);
+  --surface-glass-strong: rgba(251, 249, 244, 0.88);
+  --sidebar: rgba(247, 244, 237, 0.82);
+  --surface-glass-fallback: #fbf9f4;
+  --surface-glass-strong-fallback: #fbf9f4;
+  --sidebar-fallback: #f7f4ed;
+
+  /* Text */
+  --text: #1b1924;
+  --text-2: #676273;
+  --text-3: #6f6979;
+  --text-inverse: #f4f1e9;
+
+  /* Lines and controls */
+  --line: #ded8cd;
+  --line-strong: #cbc2b7;
+  --fill-soft: rgba(27, 25, 36, 0.045);
+  --fill: rgba(27, 25, 36, 0.08);
+  --fill-strong: rgba(27, 25, 36, 0.14);
+  --focus: #6a55c2;
+
+  /* Brand actions */
+  --accent: #6a55c2;
+  --accent-ink: #58439f;
+  --accent-soft: #ece7fb;
+  --accent-border: rgba(106, 85, 194, 0.38);
+  --accent-contrast: #fbf9f4;
+  --accent-shadow: rgba(106, 85, 194, 0.24);
+  --gold: #b48736;
+  --gold-ink: #8b651e;
+  --gold-soft: rgba(180, 135, 54, 0.12);
+
+  /* Status */
+  --success: #3f7a55;
+  --success-soft: rgba(63, 122, 85, 0.12);
+  --warning: #a26a12;
+  --warning-soft: rgba(162, 106, 18, 0.12);
+  --danger: #b2463a;
+  --danger-soft: rgba(178, 70, 58, 0.1);
+  --window-close-hover: #c42b1c;
+  --window-close-active: #b12619;
+  --window-close-contrast: #ffffff;
+
+  /* Material */
+  --glass-blur: blur(20px) saturate(160%);
+  --glass-blur-strong: blur(26px) saturate(180%);
+  --highlight: rgba(255, 255, 255, 0.55);
+  --shadow-1: 0 1px 2px rgba(35, 30, 48, 0.05), 0 8px 24px rgba(35, 30, 48, 0.06);
+  --shadow-2: 0 2px 6px rgba(35, 30, 48, 0.08), 0 18px 52px rgba(35, 30, 48, 0.14);
+  --overlay: rgba(24, 21, 34, 0.42);
+
+  /* Type */
+  --font-ui: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", Inter, "Microsoft YaHei UI", sans-serif;
+  --font-reading: "Segoe UI Variable Text", "Segoe UI", Georgia, "Microsoft YaHei UI", serif;
+  --font-mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+
+  /* Layout */
+  --titlebar-h: 52px;
+  --sidebar-w: 232px;
+  --sidebar-compact-w: 72px;
+  --content-max: 1120px;
+  --page-gutter: 32px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+  --space-9: 64px;
+  --radius-control: 8px;
+  --radius-card: 8px;
+  --radius-window: 12px;
+  --radius-pill: 999px;
+  --control-h: 36px;
+  --row-h: 44px;
+  --icon-button: 32px;
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --dur-press: 100ms;
+  --dur-fast: 160ms;
+  --dur-standard: 240ms;
+  --dur-panel: 300ms;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #12111a;
+  --bg-raised: #1b1925;
+  --bg-subtle: #23212e;
+  --surface-glass: rgba(27, 25, 37, 0.7);
+  --surface-glass-strong: rgba(27, 25, 37, 0.86);
+  --surface-glass-fallback: #1b1925;
+  --surface-glass-strong-fallback: #1b1925;
+  --sidebar: rgba(18, 17, 26, 0.78);
+  --sidebar-fallback: #12111a;
+  --ambient-accent: rgba(154, 140, 245, 0.075);
+
+  --text: #f4f1e9;
+  --text-2: #b0aabd;
+  --text-3: #8a8497;
+  --text-inverse: #12111a;
+
+  --line: rgba(244, 241, 233, 0.12);
+  --line-strong: rgba(244, 241, 233, 0.2);
+  --fill-soft: rgba(244, 241, 233, 0.055);
+  --fill: rgba(244, 241, 233, 0.09);
+  --fill-strong: rgba(244, 241, 233, 0.16);
+  --focus: #9a8cf5;
+
+  --accent: #9a8cf5;
+  --accent-ink: #b3a9fa;
+  --accent-soft: rgba(154, 140, 245, 0.15);
+  --accent-border: rgba(154, 140, 245, 0.48);
+  --accent-contrast: #14121c;
+  --accent-shadow: rgba(91, 76, 190, 0.34);
+  --gold: #d6b36a;
+  --gold-ink: #e0c17f;
+  --gold-soft: rgba(214, 179, 106, 0.12);
+
+  --success: #6ac68b;
+  --success-soft: rgba(106, 198, 139, 0.12);
+  --warning: #d9aa54;
+  --warning-soft: rgba(217, 170, 84, 0.12);
+  --danger: #e46a5c;
+  --danger-soft: rgba(228, 106, 92, 0.11);
+  --window-close-hover: #c42b1c;
+  --window-close-active: #b12619;
+  --window-close-contrast: #ffffff;
+
+  --highlight: rgba(244, 241, 233, 0.1);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 24px rgba(0, 0, 0, 0.22);
+  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.26), 0 22px 60px rgba(0, 0, 0, 0.4);
+  --overlay: rgba(5, 4, 9, 0.62);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+    --bg: #12111a;
+    --bg-raised: #1b1925;
+    --bg-subtle: #23212e;
+    --surface-glass: rgba(27, 25, 37, 0.7);
+    --surface-glass-strong: rgba(27, 25, 37, 0.86);
+    --surface-glass-fallback: #1b1925;
+    --surface-glass-strong-fallback: #1b1925;
+    --sidebar: rgba(18, 17, 26, 0.78);
+    --sidebar-fallback: #12111a;
+    --ambient-accent: rgba(154, 140, 245, 0.075);
+    --text: #f4f1e9;
+    --text-2: #b0aabd;
+    --text-3: #8a8497;
+    --text-inverse: #12111a;
+    --line: rgba(244, 241, 233, 0.12);
+    --line-strong: rgba(244, 241, 233, 0.2);
+    --fill-soft: rgba(244, 241, 233, 0.055);
+    --fill: rgba(244, 241, 233, 0.09);
+    --fill-strong: rgba(244, 241, 233, 0.16);
+    --focus: #9a8cf5;
+    --accent: #9a8cf5;
+    --accent-ink: #b3a9fa;
+    --accent-soft: rgba(154, 140, 245, 0.15);
+    --accent-border: rgba(154, 140, 245, 0.48);
+    --accent-contrast: #14121c;
+    --accent-shadow: rgba(91, 76, 190, 0.34);
+    --gold: #d6b36a;
+    --gold-ink: #e0c17f;
+    --gold-soft: rgba(214, 179, 106, 0.12);
+    --success: #6ac68b;
+    --success-soft: rgba(106, 198, 139, 0.12);
+    --warning: #d9aa54;
+    --warning-soft: rgba(217, 170, 84, 0.12);
+    --danger: #e46a5c;
+    --danger-soft: rgba(228, 106, 92, 0.11);
+    --window-close-hover: #c42b1c;
+    --window-close-active: #b12619;
+    --window-close-contrast: #ffffff;
+    --highlight: rgba(244, 241, 233, 0.1);
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 24px rgba(0, 0, 0, 0.22);
+    --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.26), 0 22px 60px rgba(0, 0, 0, 0.4);
+    --overlay: rgba(5, 4, 9, 0.62);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-press: 0ms;
+    --dur-fast: 0ms;
+    --dur-standard: 0ms;
+    --dur-panel: 0ms;
+  }
+}

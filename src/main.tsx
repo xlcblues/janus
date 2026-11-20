@@ -6,6 +6,7 @@ import "./styles/base.css";
 import "./styles/layout.css";
 import "./styles/dashboard.css";
 import "./styles/module.css";
+import "./styles/learning.css";
 import "./styles/overlays.css";
 
 createRoot(document.getElementById("root")!).render(

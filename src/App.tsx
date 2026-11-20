@@ -5,6 +5,10 @@ import { CommandPalette } from "./components/CommandPalette";
 import { Toast } from "./components/Toast";
 import { Dashboard } from "./pages/Dashboard";
 import { ModulePage } from "./pages/ModulePage";
+import { WordsPage } from "./pages/WordsPage";
+import { SentencesPage } from "./pages/SentencesPage";
+import { NotebookPage } from "./pages/NotebookPage";
+import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { navItems } from "./data/navigation";
 import type { NavId } from "./data/navigation";
 import { applyTheme, getInitialTheme, nextTheme } from "./lib/theme";
@@ -102,6 +106,14 @@ export default function App() {
         <main className="content" ref={contentRef}>
           {activeId === "today" ? (
             <Dashboard onNavigate={navigate} onNotify={setToast} />
+          ) : activeId === "words" ? (
+            <WordsPage onNavigate={navigate} onNotify={setToast} />
+          ) : activeId === "sentences" ? (
+            <SentencesPage onNotify={setToast} />
+          ) : activeId === "notebook" ? (
+            <NotebookPage onNotify={setToast} />
+          ) : activeId === "analytics" ? (
+            <AnalyticsPage onNotify={setToast} />
           ) : (
             <ModulePage id={activeItem.id} onNavigate={navigate} onNotify={setToast} />
           )}

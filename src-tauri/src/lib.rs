@@ -1,6 +1,7 @@
 mod asr;
 mod db;
 mod llm;
+mod reminder;
 mod seed_audio;
 
 use crate::asr::AsrEngine;
@@ -20,6 +21,7 @@ struct AppState {
     asr: Option<Arc<AsrEngine>>,
     model_path: Option<PathBuf>,
     model_error: Option<String>,
+    reminder: Arc<Mutex<db::ReminderSettings>>,
 }
 
 fn desktop_error(error: tauri::Error) -> String {
@@ -596,15 +598,58 @@ fn get_reminder_settings(state: tauri::State<'_, AppState>) -> Result<db::Remind
 }
 
 #[tauri::command]
+fn get_microphone_settings(state: tauri::State<'_, AppState>) -> Result<db::MicrophoneSettings, String> {
+    with_db_read(state.inner(), db::get_microphone_settings)
+}
+
+#[tauri::command]
+fn save_microphone_settings(
+    state: tauri::State<'_, AppState>,
+    settings: db::MicrophoneSettings,
+) -> Result<(), String> {
+    with_db_write(state.inner(), |conn| db::save_microphone_settings(conn, &settings))
+}
+
+#[tauri::command]
+fn get_notification_permission(app: tauri::AppHandle) -> Result<String, String> {
+    use tauri_plugin_notification::NotificationExt;
+    let state = app
+        .notification()
+        .permission_state()
+        .map_err(|error| format!("无法读取通知权限状态：{error}"))?;
+    Ok(match state {
+        tauri::plugin::PermissionState::Granted => "granted".to_string(),
+        tauri::plugin::PermissionState::Denied => "denied".to_string(),
+        _ => "prompt".to_string(),
+    })
+}
+
+#[tauri::command]
+fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title("Janus · 测试通知")
+        .body("桌面提醒已就绪：每日复习提醒将按设置的时间出现。")
+        .show()
+        .map_err(|error| format!("发送测试通知失败：{error}"))
+}
+
+#[tauri::command]
 fn save_reminder_settings(
     state: tauri::State<'_, AppState>,
     settings: db::ReminderSettings,
 ) -> Result<(), String> {
-    with_db_write(state.inner(), |conn| db::save_reminder_settings(conn, &settings))
+    with_db_write(state.inner(), |conn| db::save_reminder_settings(conn, &settings))?;
+    if let Ok(mut guard) = state.reminder.lock() {
+        *guard = settings;
+    }
+    Ok(())
 }
 
 fn app_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
@@ -626,6 +671,7 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
                 },
                 None => (None, None),
             };
+            let reminder = Arc::new(Mutex::new(db::get_reminder_settings(&conn)?));
             app.manage(AppState {
                 db: Mutex::new(conn),
                 data_dir,
@@ -633,7 +679,9 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
                 asr,
                 model_path,
                 model_error,
+                reminder: reminder.clone(),
             });
+            reminder::start_reminder_scheduler(app.handle().clone(), reminder);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -680,7 +728,11 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             get_study_plan,
             save_study_plan,
             get_reminder_settings,
-            save_reminder_settings
+            save_reminder_settings,
+            get_microphone_settings,
+            save_microphone_settings,
+            get_notification_permission,
+            send_test_notification
         ])
 }
 

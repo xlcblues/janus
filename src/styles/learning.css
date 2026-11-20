@@ -2294,6 +2294,52 @@
   gap: 12px;
 }
 
+.reminder-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.reminder-status-label {
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.mic-select-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.mic-select-row label {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.mic-select-row select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.settings-mic-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+
 @media (max-width: 1180px) {
   .analytics-grid {
     grid-template-columns: 1fr;

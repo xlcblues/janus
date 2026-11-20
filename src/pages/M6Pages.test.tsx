@@ -12,11 +12,14 @@ describe("M6 data & settings pages", () => {
     expect(screen.getByText("错题本")).toBeInTheDocument();
   });
 
-  it("SettingsPage renders study plan and reminder panels", async () => {
+  it("SettingsPage renders study plan, reminder and voice device panels", async () => {
     render(<SettingsPage onNotify={vi.fn()} />);
     expect(await screen.findByRole("heading", { name: "设置" })).toBeInTheDocument();
     expect(screen.getByText("daily plan")).toBeInTheDocument();
     expect(screen.getByText("reminder")).toBeInTheDocument();
+    expect(screen.getByText("microphone")).toBeInTheDocument();
+    expect(screen.getAllByText(/桌面通知/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/系统默认麦克风/)).toBeInTheDocument();
     expect(screen.getByText(/云同步接口将在后续里程碑接入/)).toBeInTheDocument();
   });
 });

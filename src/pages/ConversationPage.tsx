@@ -70,8 +70,16 @@ export function ConversationPage({ onNavigate, onNotify }: ConversationPageProps
   const [pendingCorrections, setPendingCorrections] = useState<number[]>([]);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
-  // 录音与转写
-  const recorder = useRecorder();
+  // 录音与转写（优先使用设置页选择的麦克风）
+  const [micDeviceId, setMicDeviceId] = useState<string>("");
+  useEffect(() => {
+    if (!isTauriRuntime) return;
+    api
+      .getMicrophoneSettings()
+      .then((settings) => setMicDeviceId(settings.device_id))
+      .catch(() => setMicDeviceId(""));
+  }, []);
+  const recorder = useRecorder(micDeviceId);
   const [transcribing, setTranscribing] = useState(false);
   const playbackRef = useRef<HTMLAudioElement | null>(null);
   const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);

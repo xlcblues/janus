@@ -26,6 +26,11 @@ export interface RecorderHandle {
   cancel: () => void;
 }
 
+export interface MicrophoneDevice {
+  deviceId: string;
+  label: string;
+}
+
 function downsample(input: Float32Array, inputRate: number): Float32Array {
   if (inputRate === TARGET_RATE) return input;
   const ratio = inputRate / TARGET_RATE;
@@ -83,7 +88,47 @@ function getAudioContextCtor(): typeof AudioContext {
   return win.AudioContext ?? win.webkitAudioContext!;
 }
 
-export function createRecorder(): RecorderHandle {
+/**
+ * 列出系统可用的麦克风设备。
+ *
+ * 首次访问时标签可能为空（浏览器尚未授权），此时会先静默请求一次
+ * 麦克风权限以获取设备名称，然后立即释放。任何一步失败都返回空列表。
+ */
+export async function listMicrophoneDevices(): Promise<MicrophoneDevice[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    return [];
+  }
+  try {
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const seen = new Set<string>();
+    const devices: MicrophoneDevice[] = [];
+    for (const device of list) {
+      if (device.kind !== "audioinput") continue;
+      if (seen.has(device.deviceId)) continue;
+      seen.add(device.deviceId);
+      devices.push({ deviceId: device.deviceId, label: device.label || "未命名麦克风" });
+    }
+    return devices;
+  } catch {
+    return [];
+  }
+}
+
+/** 请求一次麦克风权限并返回实际可用的输入设备列表（失败返回空列表）。 */
+export async function probeMicrophoneDevices(): Promise<MicrophoneDevice[]> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    return [];
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((track) => track.stop());
+  } catch {
+    /* 权限被拒或无设备时静默降级 */
+  }
+  return listMicrophoneDevices();
+}
+
+export function createRecorder(deviceId?: string): RecorderHandle {
   let context: AudioContext | null = null;
   let stream: MediaStream | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
@@ -117,12 +162,16 @@ export function createRecorder(): RecorderHandle {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("当前环境不支持麦克风录音（缺少媒体设备 API）。");
       }
+      const constraints: MediaTrackConstraints = {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+      };
+      if (deviceId) {
+        constraints.deviceId = { exact: deviceId };
+      }
       const nextStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-        },
+        audio: constraints,
       });
       const Ctor = getAudioContextCtor();
       const nextContext = new Ctor();
@@ -172,16 +221,18 @@ export function createRecorder(): RecorderHandle {
 }
 
 /** React Hook：管理一次录音的生命周期，返回状态与动作。 */
-export function useRecorder() {
+export function useRecorder(deviceId?: string) {
   const [recording, setRecording] = useState(false);
   const [result, setResult] = useState<RecordingResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const handleRef = useRef<RecorderHandle | null>(null);
+  const deviceIdRef = useRef<string | undefined>(deviceId);
+  deviceIdRef.current = deviceId;
 
   const start = useCallback(async () => {
     setError(null);
     try {
-      const handle = createRecorder();
+      const handle = createRecorder(deviceIdRef.current);
       await handle.start();
       handleRef.current = handle;
       setResult(null);

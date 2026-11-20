@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, CalendarCheck, CloudOff, Save } from "lucide-react";
-import { api, emptyReminderSettings, emptyStudyPlan, toUserMessage } from "../lib/api";
-import type { ReminderSettings, StudyPlan } from "../lib/api";
+import { Bell, CalendarCheck, CloudOff, Mic, Save } from "lucide-react";
+import {
+  api,
+  emptyMicrophoneSettings,
+  emptyReminderSettings,
+  emptyStudyPlan,
+  toUserMessage,
+} from "../lib/api";
+import type { MicrophoneSettings, ReminderSettings, StudyPlan } from "../lib/api";
+import { listMicrophoneDevices, probeMicrophoneDevices } from "../lib/recorder";
+import type { MicrophoneDevice } from "../lib/recorder";
 
 interface SettingsPageProps {
   onNotify: (message: string) => void;
@@ -31,24 +39,46 @@ function clampMinutes(value: number): number {
 export function SettingsPage({ onNotify }: SettingsPageProps) {
   const [plan, setPlan] = useState<StudyPlan>(emptyStudyPlan);
   const [reminder, setReminder] = useState<ReminderSettings>(emptyReminderSettings);
+  const [mic, setMic] = useState<MicrophoneSettings>(emptyMicrophoneSettings);
+  const [devices, setDevices] = useState<MicrophoneDevice[]>([]);
+  const [notificationState, setNotificationState] = useState<"granted" | "denied" | "prompt" | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [testingNotification, setTestingNotification] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [nextPlan, nextReminder] = await Promise.all([
+      const [nextPlan, nextReminder, nextMic] = await Promise.all([
         api.getStudyPlan(),
         api.getReminderSettings(),
+        api.getMicrophoneSettings(),
       ]);
       setPlan(nextPlan);
       setReminder(nextReminder);
+      setMic(nextMic);
       setLoaded(true);
       setNotice(null);
     } catch (error) {
       setNotice(toUserMessage(error));
       setLoaded(false);
     }
+  }, []);
+
+  const refreshDevices = useCallback(async () => {
+    const nextDevices = await listMicrophoneDevices();
+    setDevices(nextDevices);
+  }, []);
+
+  useEffect(() => {
+    void refreshDevices();
+  }, [refreshDevices]);
+
+  useEffect(() => {
+    api
+      .getNotificationPermission()
+      .then((state) => setNotificationState(state))
+      .catch(() => setNotificationState(null));
   }, []);
 
   useEffect(() => {
@@ -67,6 +97,33 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
     setReminder((current) => ({ ...current, ...patch }));
   };
 
+  const updateMic = (deviceId: string, deviceLabel: string) => {
+    setMic((current) => ({ ...current, device_id: deviceId, device_label: deviceLabel }));
+  };
+
+  const handleProbeMicrophones = async () => {
+    setNotice(null);
+    const nextDevices = await probeMicrophoneDevices();
+    setDevices(nextDevices);
+    if (nextDevices.length === 0) {
+      setNotice("未检测到可用的麦克风设备，请检查系统录音设置。");
+    } else if (mic.device_id && !nextDevices.some((device) => device.deviceId === mic.device_id)) {
+      setNotice("已保存的麦克风当前不可用，请重新选择输入设备。");
+    }
+  };
+
+  const handleTestNotification = async () => {
+    setTestingNotification(true);
+    try {
+      await api.sendTestNotification();
+      onNotify("测试通知已发送，请查看系统通知中心。");
+    } catch (error) {
+      setNotice(toUserMessage(error));
+    } finally {
+      setTestingNotification(false);
+    }
+  };
+
   const handleSave = async () => {
     setBusy(true);
     try {
@@ -74,7 +131,8 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
       setPlan(nextPlan);
       await api.saveStudyPlan(nextPlan);
       await api.saveReminderSettings(reminder);
-      onNotify("学习计划与提醒设置已保存。");
+      await api.saveMicrophoneSettings(mic);
+      onNotify("学习计划、提醒与语音设备设置已保存。");
     } catch (error) {
       setNotice(toUserMessage(error));
     } finally {
@@ -86,9 +144,9 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
     <div className="learning-page">
       <section className="page-heading learning-heading">
         <div>
-          <p className="eyebrow">设置 · M6</p>
+          <p className="eyebrow">设置 · M7</p>
           <h1>设置</h1>
-          <p>学习计划、复习提醒与数据边界。所有设置仅保存在本地数据库。</p>
+          <p>学习计划、复习提醒、语音设备与数据边界。所有设置仅保存在本地数据库。</p>
         </div>
         <div className="learning-heading-actions">
           <button type="button" className="button-secondary" onClick={() => void refresh()} disabled={busy}>
@@ -147,7 +205,7 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
           </div>
           <div className="settings-panel-body">
             <p className="settings-hint">
-              在设定的时间提醒你完成今日学习（桌面通知能力将在后续里程碑接入，当前仅保存时间偏好）。
+              在设定的时间通过 Windows 桌面通知提醒你完成今日学习（应用运行时生效）。
             </p>
             <label className="settings-toggle">
               <input
@@ -181,6 +239,74 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
                 />
               </div>
             </div>
+            <div className="reminder-status-row">
+              <span className="reminder-status-label">
+                桌面通知：
+                {notificationState === "granted"
+                  ? "已就绪"
+                  : notificationState === "denied"
+                    ? "被系统拒绝，请到系统设置开启"
+                    : notificationState === "prompt"
+                      ? "等待授权"
+                      : "仅桌面应用可用"}
+              </span>
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => void handleTestNotification()}
+                disabled={testingNotification || !loaded}
+              >
+                {testingNotification ? "发送中…" : "发送测试通知"}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel settings-panel" aria-labelledby="mic-title">
+          <div className="panel-heading">
+            <Mic size={16} />
+            <b id="mic-title">语音设备</b>
+            <span>microphone</span>
+          </div>
+          <div className="settings-panel-body">
+            <p className="settings-hint">
+              选择朗读与 AI 对话使用的麦克风；不选择时使用系统默认设备。
+            </p>
+            <div className="mic-select-row">
+              <label htmlFor="mic-select">输入设备</label>
+              <select
+                id="mic-select"
+                value={mic.device_id}
+                onChange={(event) => {
+                  const selected = devices.find((device) => device.deviceId === event.target.value);
+                  updateMic(event.target.value, selected?.label ?? "");
+                }}
+              >
+                <option value="">系统默认麦克风</option>
+                {mic.device_id && !devices.some((device) => device.deviceId === mic.device_id) ? (
+                  <option value={mic.device_id}>
+                    {mic.device_label || "已保存设备"}（当前不可用）
+                  </option>
+                ) : null}
+                {devices.map((device) => (
+                  <option key={device.deviceId} value={device.deviceId}>
+                    {device.label || "未命名麦克风"}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => void handleProbeMicrophones()}
+              >
+                检测设备
+              </button>
+            </div>
+            <p className="settings-mic-hint">
+              {devices.length > 0
+                ? `已检测到 ${devices.length} 个输入设备。`
+                : "尚未检测到输入设备；点击「检测设备」授权后可查看具体名称。"}
+            </p>
           </div>
         </section>
 

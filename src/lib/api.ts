@@ -333,6 +333,12 @@ export interface ReminderSettings {
   hour: number;
   minute: number;
 }
+export interface MicrophoneSettings {
+  device_id: string;
+  device_label: string;
+}
+
+export type NotificationPermissionState = "granted" | "denied" | "prompt";
 
 export interface TodayProgress {
   word_reviews: number;
@@ -398,6 +404,11 @@ export const emptyReminderSettings: ReminderSettings = {
   enabled: true,
   hour: 20,
   minute: 0,
+};
+
+export const emptyMicrophoneSettings: MicrophoneSettings = {
+  device_id: "",
+  device_label: "",
 };
 
 export const emptyTodayProgress: TodayProgress = {
@@ -504,5 +515,11 @@ export const api = {
   getReminderSettings: () => invokeCommand<ReminderSettings>("get_reminder_settings"),
   saveReminderSettings: (settings: ReminderSettings) =>
     invokeCommand<void>("save_reminder_settings", { settings }),
+  getMicrophoneSettings: () => invokeCommand<MicrophoneSettings>("get_microphone_settings"),
+  saveMicrophoneSettings: (settings: MicrophoneSettings) =>
+    invokeCommand<void>("save_microphone_settings", { settings }),
+  getNotificationPermission: () =>
+    invokeCommand<NotificationPermissionState>("get_notification_permission"),
+  sendTestNotification: () => invokeCommand<void>("send_test_notification")
 };
 

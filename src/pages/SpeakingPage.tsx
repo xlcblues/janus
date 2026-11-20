@@ -73,8 +73,16 @@ export function SpeakingPage({ onNavigate, onNotify }: SpeakingPageProps) {
   const [playing, setPlaying] = useState(false);
   const [currentMs, setCurrentMs] = useState(0);
 
-  // 录音生命周期
-  const recorder = useRecorder();
+  // 录音生命周期（优先使用设置页选择的麦克风）
+  const [micDeviceId, setMicDeviceId] = useState<string>("");
+  useEffect(() => {
+    if (!isTauriRuntime) return;
+    api
+      .getMicrophoneSettings()
+      .then((settings) => setMicDeviceId(settings.device_id))
+      .catch(() => setMicDeviceId(""));
+  }, []);
+  const recorder = useRecorder(micDeviceId);
   const recordingAudioRef = useRef<HTMLAudioElement | null>(null);
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
 

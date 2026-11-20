@@ -2225,6 +2225,34 @@ pub fn save_reminder_settings(
     write_setting(conn, REMINDER_KEY, settings)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MicrophoneSettings {
+    pub device_id: String,
+    pub device_label: String,
+}
+
+impl Default for MicrophoneSettings {
+    fn default() -> Self {
+        MicrophoneSettings {
+            device_id: String::new(),
+            device_label: String::new(),
+        }
+    }
+}
+
+const MICROPHONE_KEY: &str = "microphone";
+
+pub fn get_microphone_settings(conn: &Connection) -> Result<MicrophoneSettings, AppError> {
+    read_setting(conn, MICROPHONE_KEY)
+}
+
+pub fn save_microphone_settings(
+    conn: &Connection,
+    settings: &MicrophoneSettings,
+) -> Result<(), AppError> {
+    write_setting(conn, MICROPHONE_KEY, settings)
+}
+
 /// 最近 N 天（默认 7）按日聚合的复习/听写/朗读/对话统计。所有数字都从
 /// 本地事件表投影而来，与「今日统计」使用相同的 UTC 日边界保持一致。
 pub fn get_weekly_stats(conn: &Connection, days: Option<i64>) -> Result<Vec<DailyStat>, AppError> {
@@ -2940,6 +2968,21 @@ mod tests {
         assert!(!loaded_reminder.enabled);
         assert_eq!(loaded_reminder.hour, 21);
         assert_eq!(loaded_reminder.minute, 30);
+    }
+    #[test]
+    fn microphone_settings_roundtrip() {
+        let conn = test_conn();
+        let loaded = get_microphone_settings(&conn).unwrap();
+        assert!(loaded.device_id.is_empty());
+
+        let settings = MicrophoneSettings {
+            device_id: "default-mic-id-1".to_string(),
+            device_label: "内置麦克风 (Realtek)".to_string(),
+        };
+        save_microphone_settings(&conn, &settings).unwrap();
+        let reloaded = get_microphone_settings(&conn).unwrap();
+        assert_eq!(reloaded.device_id, "default-mic-id-1");
+        assert_eq!(reloaded.device_label, "内置麦克风 (Realtek)");
     }
 
     #[test]

@@ -1,11 +1,11 @@
 use rusqlite::{params, Connection, OptionalExtension, Result as SqliteResult};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::seed_audio::{wav_duration_ms, SEED_CLIPS};
 
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 4;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS words (
@@ -180,6 +180,58 @@ CREATE TABLE IF NOT EXISTS speaking_attempts (
 CREATE INDEX IF NOT EXISTS idx_speaking_attempts_segment ON speaking_attempts(segment_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_speaking_attempts_clip ON speaking_attempts(clip_id, created_at);
 "#;
+
+const MIGRATION_4: &str = r#"
+CREATE TABLE IF NOT EXISTS conversation_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conversation_scenes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    goal TEXT NOT NULL,
+    role TEXT NOT NULL,
+    user_goal TEXT NOT NULL,
+    target_words TEXT NOT NULL DEFAULT '',
+    level TEXT NOT NULL DEFAULT 'a2',
+    greeting TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT 'en',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS conversation_sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    scene_id INTEGER NOT NULL REFERENCES conversation_scenes(id),
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    turn_count INTEGER NOT NULL DEFAULT 0,
+    summary TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id INTEGER NOT NULL REFERENCES conversation_sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    correction TEXT,
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_session ON conversation_messages(session_id, id);
+CREATE INDEX IF NOT EXISTS idx_conversation_sessions_created ON conversation_sessions(created_at);
+
+INSERT OR IGNORE INTO conversation_scenes (id, title, goal, role, user_goal, target_words, level, greeting, lang) VALUES
+    (1, '咖啡馆点单', '练习在咖啡馆点单、询问推荐并完成结账。', '你是咖啡馆店员 Emma，友好耐心，说话简短自然。', '点一杯饮料、询问推荐并完成结账。', 'menu, order, recommend, latte, bill', 'a2', 'Hi there! Welcome to our cafe. What would you like to order today?', 'en'),
+    (2, '机场问路', '练习在机场问路、确认登机口与时间。', '你是机场工作人员 David，语气温和，指引清晰。', '找到登机口并确认登机时间。', 'gate, boarding, terminal, flight, depart', 'a2', 'Good morning! How can I help you at the airport today?', 'en'),
+    (3, '酒店入住', '练习办理酒店入住、提出需求并咨询设施。', '你是前台接待员 Mia，礼貌高效。', '办理入住，并询问早餐时间与 Wi-Fi。', 'check-in, reservation, breakfast, wifi, key', 'a2', 'Welcome to the hotel! Do you have a reservation with us?', 'en'),
+    (4, '求职面试', '练习面试中自我介绍并回答问题。', '你是面试官 Mr. Lee，专业但不严肃。', '自我介绍并回答 2–3 个面试问题。', 'experience, strength, teamwork, career, goal', 'b1', 'Thanks for coming in. Could you start by telling me a little about yourself?', 'en'),
+    (5, '周末计划', '练习谈论周末安排与回应邀约。', '你是朋友 Sam，轻松随意，会追问细节。', '聊一聊周末计划并回应邀约。', 'plan, weekend, invite, join, free', 'a2', 'Hey! What are you planning to do this weekend?', 'en');
+"#;
+
 
 
 #[derive(Debug)]
@@ -487,6 +539,12 @@ fn migrate(conn: &mut Connection) -> SqliteResult<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(MIGRATION_3)?;
         tx.execute_batch("PRAGMA user_version = 3;")?;
+        tx.commit()?;
+    }
+    if version < 4 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_4)?;
+        tx.execute_batch("PRAGMA user_version = 4;")?;
         tx.commit()?;
     }
     Ok(())
@@ -960,6 +1018,7 @@ pub fn clear_learning_data(conn: &mut Connection, data_dir: &Path) -> Result<Cle
     tx.execute("DELETE FROM vocabulary", [])?;
     tx.execute("DELETE FROM word_states", [])?;
     tx.execute("DELETE FROM sentence_states", [])?;
+    tx.execute("DELETE FROM conversation_sessions", [])?;
     let now = now_secs();
     tx.execute(
         "INSERT INTO word_states (word_id, stage, interval_days, ease, repetitions, lapses, due_at, created_at)
@@ -1496,12 +1555,609 @@ pub fn get_speaking_stats(conn: &Connection) -> Result<SpeakingStats, AppError> 
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ConversationSettings {
+    pub base_url: String,
+    pub api_key: String,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationScene {
+    pub id: i64,
+    pub title: String,
+    pub goal: String,
+    pub role: String,
+    pub user_goal: String,
+    pub target_words: String,
+    pub level: String,
+    pub greeting: String,
+    pub lang: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationMessage {
+    pub id: i64,
+    pub session_id: i64,
+    pub role: String,
+    pub content: String,
+    pub correction: Option<String>,
+    pub latency_ms: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSessionSummary {
+    pub id: i64,
+    pub scene_id: i64,
+    pub scene_title: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub turn_count: i64,
+    pub summary: String,
+    pub message_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationStartResult {
+    pub session: ConversationSessionSummary,
+    pub greeting: ConversationMessage,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationTurnResult {
+    pub user_message: ConversationMessage,
+    pub assistant_message: ConversationMessage,
+    pub turn_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationStats {
+    pub total_sessions: i64,
+    pub total_turns: i64,
+    pub today_sessions: i64,
+    pub today_turns: i64,
+    pub recent_scenes: Vec<SceneUsage>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SceneUsage {
+    pub scene_id: i64,
+    pub title: String,
+    pub sessions: i64,
+}
+
+/// One learner-facing correction item, produced by the LLM correction pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Correction {
+    pub original: String,
+    pub suggestion: String,
+    pub note: String,
+}
+
+const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_MODEL: &str = "gpt-4o-mini";
+
+pub fn get_conversation_settings(conn: &Connection) -> Result<ConversationSettings, AppError> {
+    let mut stmt = conn.prepare("SELECT key, value FROM conversation_settings")?;
+    let rows = stmt
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    let mut settings = ConversationSettings {
+        base_url: DEFAULT_BASE_URL.to_string(),
+        api_key: String::new(),
+        model: DEFAULT_MODEL.to_string(),
+    };
+    for (key, value) in rows {
+        match key.as_str() {
+            "base_url" => settings.base_url = value,
+            "api_key" => settings.api_key = value,
+            "model" => settings.model = value,
+            _ => {}
+        }
+    }
+    Ok(settings)
+}
+
+pub fn save_conversation_settings(
+    conn: &mut Connection,
+    settings: &ConversationSettings,
+) -> Result<(), AppError> {
+    let tx = conn.transaction()?;
+    for (key, value) in [
+        ("base_url", settings.base_url.trim()),
+        ("api_key", settings.api_key.trim()),
+        ("model", settings.model.trim()),
+    ] {
+        tx.execute(
+            "INSERT INTO conversation_settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn get_conversation_scenes(conn: &Connection) -> Result<Vec<ConversationScene>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, title, goal, role, user_goal, target_words, level, greeting, lang
+         FROM conversation_scenes WHERE enabled = 1 ORDER BY id",
+    )?;
+    let scenes = stmt
+        .query_map([], scene_from_row)?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(scenes)
+}
+
+fn scene_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<ConversationScene> {
+    Ok(ConversationScene {
+        id: row.get(0)?,
+        title: row.get(1)?,
+        goal: row.get(2)?,
+        role: row.get(3)?,
+        user_goal: row.get(4)?,
+        target_words: row.get(5)?,
+        level: row.get(6)?,
+        greeting: row.get(7)?,
+        lang: row.get(8)?,
+    })
+}
+
+pub fn get_conversation_scene(conn: &Connection, scene_id: i64) -> Result<ConversationScene, AppError> {
+    conn.query_row(
+        "SELECT id, title, goal, role, user_goal, target_words, level, greeting, lang
+         FROM conversation_scenes WHERE id = ?1",
+        [scene_id],
+        scene_from_row,
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound("对话场景不存在，请刷新后重试。".to_string())
+        }
+        other => AppError::Sqlite(other),
+    })
+}
+
+pub fn get_conversation_scene_by_session(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<ConversationScene, AppError> {
+    conn.query_row(
+        "SELECT sc.id, sc.title, sc.goal, sc.role, sc.user_goal, sc.target_words, sc.level, sc.greeting, sc.lang
+         FROM conversation_sessions s
+         JOIN conversation_scenes sc ON sc.id = s.scene_id
+         WHERE s.id = ?1",
+        [session_id],
+        scene_from_row,
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound("对话会话不存在，请刷新后重试。".to_string())
+        }
+        other => AppError::Sqlite(other),
+    })
+}
+
+pub fn start_conversation_session(
+    conn: &Connection,
+    scene_id: i64,
+) -> Result<ConversationStartResult, AppError> {
+    let scene = get_conversation_scene(conn, scene_id)?;
+    let now = now_secs();
+    conn.execute(
+        "INSERT INTO conversation_sessions (scene_id, started_at, ended_at, turn_count, summary, created_at)
+         VALUES (?1, ?2, NULL, 0, '', ?2)",
+        params![scene_id, now],
+    )?;
+    let session_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO conversation_messages (session_id, role, content, correction, latency_ms, created_at)
+         VALUES (?1, 'assistant', ?2, NULL, 0, ?3)",
+        params![session_id, scene.greeting, now],
+    )?;
+    let greeting = ConversationMessage {
+        id: conn.last_insert_rowid(),
+        session_id,
+        role: "assistant".to_string(),
+        content: scene.greeting,
+        correction: None,
+        latency_ms: 0,
+        created_at: now,
+    };
+    let session = get_conversation_session(conn, session_id)?;
+    Ok(ConversationStartResult { session, greeting })
+}
+
+pub fn get_conversation_session(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<ConversationSessionSummary, AppError> {
+    conn.query_row(
+        "SELECT s.id, s.scene_id, sc.title, s.started_at, s.ended_at, s.turn_count, s.summary,
+                (SELECT COUNT(*) FROM conversation_messages m WHERE m.session_id = s.id) AS message_count
+         FROM conversation_sessions s
+         JOIN conversation_scenes sc ON sc.id = s.scene_id
+         WHERE s.id = ?1",
+        [session_id],
+        session_summary_from_row,
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound("对话会话不存在，请刷新后重试。".to_string())
+        }
+        other => AppError::Sqlite(other),
+    })
+}
+
+fn session_summary_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<ConversationSessionSummary> {
+    Ok(ConversationSessionSummary {
+        id: row.get(0)?,
+        scene_id: row.get(1)?,
+        scene_title: row.get(2)?,
+        started_at: row.get(3)?,
+        ended_at: row.get(4)?,
+        turn_count: row.get(5)?,
+        summary: row.get(6)?,
+        message_count: row.get(7)?,
+    })
+}
+
+pub fn get_conversation_sessions(
+    conn: &Connection,
+    limit: Option<i64>,
+) -> Result<Vec<ConversationSessionSummary>, AppError> {
+    let limit = limit.unwrap_or(20).max(1).min(200);
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.scene_id, sc.title, s.started_at, s.ended_at, s.turn_count, s.summary,
+                (SELECT COUNT(*) FROM conversation_messages m WHERE m.session_id = s.id) AS message_count
+         FROM conversation_sessions s
+         JOIN conversation_scenes sc ON sc.id = s.scene_id
+         ORDER BY s.id DESC LIMIT ?1",
+    )?;
+    let sessions = stmt
+        .query_map([limit], session_summary_from_row)?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(sessions)
+}
+
+pub fn get_conversation_history(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<Vec<ConversationMessage>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, role, content, correction, latency_ms, created_at
+         FROM conversation_messages WHERE session_id = ?1 ORDER BY id",
+    )?;
+    let messages = stmt
+        .query_map([session_id], message_from_row)?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(messages)
+}
+
+fn message_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<ConversationMessage> {
+    Ok(ConversationMessage {
+        id: row.get(0)?,
+        session_id: row.get(1)?,
+        role: row.get(2)?,
+        content: row.get(3)?,
+        correction: row.get(4)?,
+        latency_ms: row.get(5)?,
+        created_at: row.get(6)?,
+    })
+}
+
+pub fn get_conversation_message(
+    conn: &Connection,
+    session_id: i64,
+    message_id: i64,
+) -> Result<ConversationMessage, AppError> {
+    conn.query_row(
+        "SELECT id, session_id, role, content, correction, latency_ms, created_at
+         FROM conversation_messages WHERE session_id = ?1 AND id = ?2",
+        params![session_id, message_id],
+        message_from_row,
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound("对话消息不存在，请刷新后重试。".to_string())
+        }
+        other => AppError::Sqlite(other),
+    })
+}
+
+pub fn update_conversation_correction(
+    conn: &Connection,
+    session_id: i64,
+    message_id: i64,
+    correction_json: &str,
+) -> Result<(), AppError> {
+    let changed = conn.execute(
+        "UPDATE conversation_messages SET correction = ?1
+         WHERE session_id = ?2 AND id = ?3",
+        params![correction_json, session_id, message_id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound("对话消息不存在，请刷新后重试。".to_string()));
+    }
+    Ok(())
+}
+
+pub fn get_conversation_session_turns(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<i64, AppError> {
+    conn.query_row(
+        "SELECT turn_count FROM conversation_sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )
+    .map_err(|error| match error {
+        rusqlite::Error::QueryReturnedNoRows => {
+            AppError::NotFound("对话会话不存在，请刷新后重试。".to_string())
+        }
+        other => AppError::Sqlite(other),
+    })
+}
+
+pub fn end_conversation_session(
+    conn: &Connection,
+    session_id: i64,
+    summary: &str,
+) -> Result<ConversationSessionSummary, AppError> {
+    let now = now_secs();
+    conn.execute(
+        "UPDATE conversation_sessions SET ended_at = ?1, summary = ?2 WHERE id = ?3",
+        params![now, summary, session_id],
+    )?;
+    get_conversation_session(conn, session_id)
+}
+
+/// Persist one full turn (user + assistant) inside a single transaction.
+pub fn record_conversation_turn(
+    conn: &mut Connection,
+    session_id: i64,
+    user_content: &str,
+    assistant_content: &str,
+    latency_ms: i64,
+) -> Result<ConversationTurnResult, AppError> {
+    let now = now_secs();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO conversation_messages (session_id, role, content, correction, latency_ms, created_at)
+         VALUES (?1, 'user', ?2, NULL, 0, ?3)",
+        params![session_id, user_content, now],
+    )?;
+    let user_id = tx.last_insert_rowid();
+    tx.execute(
+        "INSERT INTO conversation_messages (session_id, role, content, correction, latency_ms, created_at)
+         VALUES (?1, 'assistant', ?2, NULL, ?3, ?4)",
+        params![session_id, assistant_content, latency_ms, now],
+    )?;
+    let assistant_id = tx.last_insert_rowid();
+    tx.execute(
+        "UPDATE conversation_sessions SET turn_count = turn_count + 1 WHERE id = ?1",
+        [session_id],
+    )?;
+    let turn_count: i64 = tx.query_row(
+        "SELECT turn_count FROM conversation_sessions WHERE id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    tx.commit()?;
+    Ok(ConversationTurnResult {
+        user_message: ConversationMessage {
+            id: user_id,
+            session_id,
+            role: "user".to_string(),
+            content: user_content.to_string(),
+            correction: None,
+            latency_ms: 0,
+            created_at: now,
+        },
+        assistant_message: ConversationMessage {
+            id: assistant_id,
+            session_id,
+            role: "assistant".to_string(),
+            content: assistant_content.to_string(),
+            correction: None,
+            latency_ms,
+            created_at: now,
+        },
+        turn_count,
+    })
+}
+
+pub fn get_conversation_stats(conn: &Connection) -> Result<ConversationStats, AppError> {
+    let now = now_secs();
+    let today_start = now - (now % 86400);
+    let total_sessions: i64 =
+        conn.query_row("SELECT COUNT(*) FROM conversation_sessions", [], |row| row.get(0))?;
+    let total_turns: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(turn_count), 0) FROM conversation_sessions",
+        [],
+        |row| row.get(0),
+    )?;
+    let today_sessions: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM conversation_sessions WHERE started_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let today_turns: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(turn_count), 0) FROM conversation_sessions WHERE started_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let mut stmt = conn.prepare(
+        "SELECT s.scene_id, sc.title, COUNT(*) AS sessions
+         FROM conversation_sessions s
+         JOIN conversation_scenes sc ON sc.id = s.scene_id
+         GROUP BY s.scene_id
+         ORDER BY sessions DESC, s.scene_id ASC
+         LIMIT 4",
+    )?;
+    let recent_scenes = stmt
+        .query_map([], |row| {
+            Ok(SceneUsage {
+                scene_id: row.get(0)?,
+                title: row.get(1)?,
+                sessions: row.get(2)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(ConversationStats {
+        total_sessions,
+        total_turns,
+        today_sessions,
+        today_turns,
+        recent_scenes,
+    })
+}
+
+/// Parse a Correction object embedded in an LLM reply. Returns None when the
+/// model reported no correction or the reply could not be parsed (tolerated).
+pub fn parse_correction(content: &str) -> Option<Correction> {
+    let trimmed = content.trim();
+    let start = trimmed.find('{')?;
+    let end = trimmed.rfind('}')?;
+    if start >= end {
+        return None;
+    }
+    let candidate = &trimmed[start..=end];
+    let value: serde_json::Value = serde_json::from_str(candidate).ok()?;
+    let get = |key: &str| -> String {
+        value
+            .get(key)
+            .and_then(|item| item.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let correction = Correction {
+        original: get("original"),
+        suggestion: get("suggestion"),
+        note: get("note"),
+    };
+    if correction.original.is_empty() && correction.suggestion.is_empty() && correction.note.is_empty() {
+        None
+    } else {
+        Some(correction)
+    }
+}
+
+/// JSON stored in the correction column; "{}" marks "analyzed, no correction".
+pub fn correction_to_json(correction: Option<&Correction>) -> String {
+    match correction {
+        Some(item) => serde_json::to_string(item).unwrap_or_else(|_| "{}".to_string()),
+        None => "{}".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn test_conn() -> Connection {
         open_in_memory().expect("in-memory database should open")
+    }
+
+    #[test]
+    fn conversation_settings_roundtrip() {
+        let mut conn = test_conn();
+        let settings = ConversationSettings {
+            base_url: "https://api.deepseek.com/v1".to_string(),
+            api_key: "sk-test".to_string(),
+            model: "deepseek-chat".to_string(),
+        };
+        save_conversation_settings(&mut conn, &settings).unwrap();
+        let loaded = get_conversation_settings(&conn).unwrap();
+        assert_eq!(loaded.base_url, settings.base_url);
+        assert_eq!(loaded.api_key, settings.api_key);
+        assert_eq!(loaded.model, settings.model);
+    }
+
+    #[test]
+    fn conversation_settings_have_defaults() {
+        let conn = test_conn();
+        let settings = get_conversation_settings(&conn).unwrap();
+        assert!(!settings.base_url.is_empty());
+        assert!(settings.api_key.is_empty());
+        assert!(!settings.model.is_empty());
+    }
+
+    #[test]
+    fn conversation_scenes_are_seeded() {
+        let conn = test_conn();
+        let scenes = get_conversation_scenes(&conn).unwrap();
+        assert!(!scenes.is_empty());
+        assert!(scenes.iter().any(|scene| scene.title.contains("咖啡馆")));
+    }
+
+    #[test]
+    fn conversation_session_flow() {
+        let mut conn = test_conn();
+        let scenes = get_conversation_scenes(&conn).unwrap();
+        let scene_id = scenes[0].id;
+        let started = start_conversation_session(&conn, scene_id).unwrap();
+        assert_eq!(started.greeting.role, "assistant");
+        assert!(!started.greeting.content.is_empty());
+        assert_eq!(started.session.turn_count, 0);
+
+        let turn = record_conversation_turn(
+            &mut conn,
+            started.session.id,
+            "I would like a coffee please.",
+            "Sure! Would you like it hot or iced?",
+            1200,
+        )
+        .unwrap();
+        assert_eq!(turn.turn_count, 1);
+        assert_eq!(turn.user_message.role, "user");
+        assert_eq!(turn.assistant_message.role, "assistant");
+
+        let history = get_conversation_history(&conn, started.session.id).unwrap();
+        assert_eq!(history.len(), 3);
+
+        let ended = end_conversation_session(&conn, started.session.id, "完成 1 轮对话练习。").unwrap();
+        assert!(ended.ended_at.is_some());
+        assert_eq!(ended.turn_count, 1);
+
+        let sessions = get_conversation_sessions(&conn, None).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].message_count, 3);
+
+        let stats = get_conversation_stats(&conn).unwrap();
+        assert_eq!(stats.total_sessions, 1);
+        assert_eq!(stats.total_turns, 1);
+        assert_eq!(stats.recent_scenes[0].scene_id, scene_id);
+    }
+
+    #[test]
+    fn correction_parse_and_json_roundtrip() {
+        let correction = parse_correction(
+            r#"{"original":"I want coffee.","suggestion":"I would like a coffee, please.","note":"更礼貌的表达"}"#,
+        )
+        .unwrap();
+        assert_eq!(correction.original, "I want coffee.");
+        assert_eq!(correction.suggestion, "I would like a coffee, please.");
+        assert!(parse_correction(r#"{"original":"","suggestion":"","note":""}"#).is_none());
+        assert!(parse_correction("完全不是 JSON").is_none());
+        assert_eq!(correction_to_json(Some(&correction)).contains("suggestion"), true);
+        assert_eq!(correction_to_json(None), "{}");
+    }
+
+    #[test]
+    fn clearing_learning_data_clears_conversations() {
+        let mut conn = test_conn();
+        let scenes = get_conversation_scenes(&conn).unwrap();
+        let started = start_conversation_session(&conn, scenes[0].id).unwrap();
+        record_conversation_turn(&mut conn, started.session.id, "hello", "Hi!", 0).unwrap();
+        let dir = std::env::temp_dir().join(format!("janus-clear-conv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        clear_learning_data(&mut conn, &dir).unwrap();
+        assert!(get_conversation_sessions(&conn, None).unwrap().is_empty());
+        assert!(get_conversation_history(&conn, started.session.id).unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

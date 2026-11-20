@@ -182,6 +182,103 @@ export interface SpeakingStats {
   weakest_segments: SpeakingWeakSegment[];
 }
 
+
+export interface ConversationSettings {
+  base_url: string;
+  api_key: string;
+  model: string;
+}
+
+export interface ConversationScene {
+  id: number;
+  title: string;
+  goal: string;
+  role: string;
+  user_goal: string;
+  target_words: string;
+  level: string;
+  greeting: string;
+  lang: string;
+}
+
+export interface ConversationMessage {
+  id: number;
+  session_id: number;
+  role: string;
+  content: string;
+  correction: string | null;
+  latency_ms: number;
+  created_at: number;
+}
+
+export interface ConversationSessionSummary {
+  id: number;
+  scene_id: number;
+  scene_title: string;
+  started_at: number;
+  ended_at: number | null;
+  turn_count: number;
+  summary: string;
+  message_count: number;
+}
+
+export interface ConversationStartResult {
+  session: ConversationSessionSummary;
+  greeting: ConversationMessage;
+}
+
+export interface ConversationTurnResult {
+  user_message: ConversationMessage;
+  assistant_message: ConversationMessage;
+  turn_count: number;
+}
+
+export interface SceneUsage {
+  scene_id: number;
+  title: string;
+  sessions: number;
+}
+
+export interface ConversationStats {
+  total_sessions: number;
+  total_turns: number;
+  today_sessions: number;
+  today_turns: number;
+  recent_scenes: SceneUsage[];
+}
+
+export interface Correction {
+  original: string;
+  suggestion: string;
+  note: string;
+}
+
+export interface Transcript {
+  text: string;
+  confidence: number;
+  low_confidence: boolean;
+}
+
+export interface LlmTestResult {
+  ok: boolean;
+  latency_ms: number;
+  message: string;
+}
+
+export const emptyConversationSettings: ConversationSettings = {
+  base_url: "https://api.openai.com/v1",
+  api_key: "",
+  model: "gpt-4o-mini",
+};
+
+export const emptyConversationStats: ConversationStats = {
+  total_sessions: 0,
+  total_turns: 0,
+  today_sessions: 0,
+  today_turns: 0,
+  recent_scenes: [],
+};
+
 export const emptyOverview: Overview = {
   total_words: 0,
   due_words: 0,
@@ -250,5 +347,25 @@ export const api = {
     durationMs: number,
   ) => invokeCommand<SpeakingResult>("evaluate_speaking", { clipId, segmentId, wav, durationMs }),
   getSpeakingStats: () => invokeCommand<SpeakingStats>("get_speaking_stats"),
+  getConversationSettings: () => invokeCommand<ConversationSettings>("get_conversation_settings"),
+  saveConversationSettings: (settings: ConversationSettings) =>
+    invokeCommand<void>("save_conversation_settings", { settings }),
+  testConversationConnection: (settings?: ConversationSettings) =>
+    invokeCommand<LlmTestResult>("test_conversation_connection", settings ? { settings } : {}),
+  getConversationScenes: () => invokeCommand<ConversationScene[]>("get_conversation_scenes"),
+  startConversation: (sceneId: number) =>
+    invokeCommand<ConversationStartResult>("start_conversation", { sceneId }),
+  getConversationHistory: (sessionId: number) =>
+    invokeCommand<ConversationMessage[]>("get_conversation_history", { sessionId }),
+  getConversationSessions: (limit?: number) =>
+    invokeCommand<ConversationSessionSummary[]>("get_conversation_sessions", { limit }),
+  getConversationStats: () => invokeCommand<ConversationStats>("get_conversation_stats"),
+  endConversation: (sessionId: number) =>
+    invokeCommand<ConversationSessionSummary>("end_conversation", { sessionId }),
+  sendConversationMessage: (sessionId: number, content: string) =>
+    invokeCommand<ConversationTurnResult>("send_conversation_message", { sessionId, content }),
+  analyzeConversationCorrection: (sessionId: number, messageId: number) =>
+    invokeCommand<Correction | null>("analyze_conversation_correction", { sessionId, messageId }),
+  transcribeSpeech: (wav: number[]) => invokeCommand<Transcript>("transcribe_speech", { wav }),
 };
 

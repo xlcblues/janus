@@ -9,6 +9,7 @@ import { WordsPage } from "./pages/WordsPage";
 import { SentencesPage } from "./pages/SentencesPage";
 import { ListeningPage } from "./pages/ListeningPage";
 import { SpeakingPage } from "./pages/SpeakingPage";
+import { ConversationPage } from "./pages/ConversationPage";
 import { NotebookPage } from "./pages/NotebookPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { navItems } from "./data/navigation";
@@ -116,6 +117,8 @@ export default function App() {
             <ListeningPage onNavigate={navigate} onNotify={setToast} />
           ) : activeId === "speaking" ? (
             <SpeakingPage onNavigate={navigate} onNotify={setToast} />
+          ) : activeId === "conversation" ? (
+            <ConversationPage onNavigate={navigate} onNotify={setToast} />
           ) : activeId === "notebook" ? (
             <NotebookPage onNotify={setToast} />
           ) : activeId === "analytics" ? (

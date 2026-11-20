@@ -136,6 +136,52 @@ export interface DeleteResult {
   file_name: string;
 }
 
+export interface SpeakingStatus {
+  available: boolean;
+  model_path: string | null;
+  error: string | null;
+}
+
+export type WordStatus = "correct" | "missing" | "changed" | "extra";
+
+export interface WordFeedback {
+  word: string;
+  status: WordStatus;
+}
+
+export interface SpeakingResult {
+  id: number;
+  clip_id: number;
+  segment_id: number;
+  expected: string;
+  transcribed: string;
+  word_matches: number;
+  word_total: number;
+  accuracy_percent: number;
+  confidence: number;
+  low_confidence: boolean;
+  duration_ms: number;
+  created_at: number;
+  words: WordFeedback[];
+}
+
+export interface SpeakingWeakSegment {
+  segment_id: number;
+  clip_id: number;
+  title: string;
+  attempts: number;
+  accuracy_percent: number;
+}
+
+export interface SpeakingStats {
+  total_attempts: number;
+  today_attempts: number;
+  accuracy_percent: number;
+  low_confidence_attempts: number;
+  total_duration_ms: number;
+  weakest_segments: SpeakingWeakSegment[];
+}
+
 export const emptyOverview: Overview = {
   total_words: 0,
   due_words: 0,
@@ -196,4 +242,13 @@ export const api = {
     invokeCommand<DictationResult>("record_dictation", { clipId, segmentId, submitted, durationMs }),
   getDictationStats: () => invokeCommand<DictationStats>("get_dictation_stats"),
   deleteSeedAudio: (clipId: number) => invokeCommand<DeleteResult>("delete_seed_audio", { clipId }),
+  getSpeakingStatus: () => invokeCommand<SpeakingStatus>("get_speaking_status"),
+  evaluateSpeaking: (
+    clipId: number,
+    segmentId: number,
+    wav: number[],
+    durationMs: number,
+  ) => invokeCommand<SpeakingResult>("evaluate_speaking", { clipId, segmentId, wav, durationMs }),
+  getSpeakingStats: () => invokeCommand<SpeakingStats>("get_speaking_stats"),
 };
+

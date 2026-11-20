@@ -1,17 +1,24 @@
+mod asr;
 mod db;
 mod seed_audio;
 
+use crate::asr::AsrEngine;
 use rusqlite::Connection;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{Manager, WebviewWindow};
 
-/// Shared application state. `rusqlite::Connection` is `Send` but not `Sync`,
-/// so we wrap it in a `Mutex` to satisfy Tauri's `State` requirements.
+/// Shared application state. `rusqlite::Connection` is `Send` but not
+/// `Sync`, so it is wrapped in a `Mutex` to satisfy Tauri's `State`
+/// requirements. The Whisper engine is loaded lazily and shared across async
+/// commands via `Arc`.
 struct AppState {
     db: Mutex<Connection>,
     data_dir: PathBuf,
     media_dir: PathBuf,
+    asr: Option<Arc<AsrEngine>>,
+    model_path: Option<PathBuf>,
+    model_error: Option<String>,
 }
 
 fn desktop_error(error: tauri::Error) -> String {
@@ -38,6 +45,26 @@ fn with_db_write<T>(
         .lock()
         .map_err(|_| "本地数据锁获取失败，请稍后重试。".to_string())?;
     operation(&mut guard).map_err(|error| error.user_message())
+}
+
+/// Locate the offline Whisper model across packaged resources, the dev
+/// checkout and the app data dir. Returns None when the model has not been
+/// downloaded yet.
+fn resolve_model_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    const MODEL_NAME: &str = "ggml-tiny.en.bin";
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        candidates.push(resource_dir.join("models").join(MODEL_NAME));
+        candidates.push(resource_dir.join(MODEL_NAME));
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join("src-tauri").join("models").join(MODEL_NAME));
+        candidates.push(current_dir.join("models").join(MODEL_NAME));
+    }
+    if let Ok(data_dir) = app.path().app_data_dir() {
+        candidates.push(data_dir.join("models").join(MODEL_NAME));
+    }
+    candidates.into_iter().find(|path| path.exists())
 }
 
 #[tauri::command]
@@ -150,7 +177,6 @@ fn clear_learning_data(state: tauri::State<'_, AppState>) -> Result<db::ClearRes
     })
 }
 
-
 #[tauri::command]
 fn get_audio_catalog(
     state: tauri::State<'_, AppState>,
@@ -200,6 +226,64 @@ fn delete_seed_audio(
     Ok(result)
 }
 
+#[derive(serde::Serialize)]
+struct SpeakingStatus {
+    available: bool,
+    model_path: Option<String>,
+    error: Option<String>,
+}
+
+#[tauri::command]
+fn get_speaking_status(state: tauri::State<'_, AppState>) -> Result<SpeakingStatus, String> {
+    let inner = state.inner();
+    Ok(SpeakingStatus {
+        available: inner.asr.is_some(),
+        model_path: inner
+            .model_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        error: inner.model_error.clone(),
+    })
+}
+
+/// Transcribe a recorded WAV blob offline, then align it against the target
+/// segment and persist the attempt. Heavy inference runs on a blocking thread
+/// pool; the raw audio is discarded after transcription (never stored).
+#[tauri::command]
+async fn evaluate_speaking(
+    state: tauri::State<'_, AppState>,
+    clip_id: i64,
+    segment_id: i64,
+    wav: Vec<u8>,
+    duration_ms: i64,
+) -> Result<db::SpeakingResult, String> {
+    let engine = state.inner().asr.clone().ok_or_else(|| {
+        "离线语音模型未安装：请运行 scripts/download-whisper-model.ps1 下载后重启应用。".to_string()
+    })?;
+    let transcription =
+        match tauri::async_runtime::spawn_blocking(move || engine.transcribe(&wav)).await {
+            Ok(Ok(transcription)) => transcription,
+            Ok(Err(message)) => return Err(message),
+            Err(error) => return Err(format!("语音识别任务执行失败：{error}")),
+        };
+    with_db_write(state.inner(), |conn| {
+        db::record_speaking_attempt(
+            conn,
+            clip_id,
+            segment_id,
+            transcription.text,
+            transcription.confidence as f64,
+            transcription.low_confidence,
+            duration_ms,
+        )
+    })
+}
+
+#[tauri::command]
+fn get_speaking_stats(state: tauri::State<'_, AppState>) -> Result<db::SpeakingStats, String> {
+    with_db_read(state.inner(), db::get_speaking_stats)
+}
+
 fn app_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .setup(|app| {
@@ -215,10 +299,21 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
                 }
             }
             db::ensure_seed_listening_clips(&mut conn)?;
+            let model_path = resolve_model_path(app.handle());
+            let (asr, model_error) = match &model_path {
+                Some(path) => match AsrEngine::load(path) {
+                    Ok(engine) => (Some(Arc::new(engine)), None),
+                    Err(error) => (None, Some(error)),
+                },
+                None => (None, None),
+            };
             app.manage(AppState {
                 db: Mutex::new(conn),
                 data_dir,
                 media_dir,
+                asr,
+                model_path,
+                model_error,
             });
             Ok(())
         })
@@ -243,7 +338,10 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             get_listening_detail,
             record_dictation,
             get_dictation_stats,
-            delete_seed_audio
+            delete_seed_audio,
+            get_speaking_status,
+            evaluate_speaking,
+            get_speaking_stats
         ])
 }
 

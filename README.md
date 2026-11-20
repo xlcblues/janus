@@ -6,7 +6,7 @@ Janus 是太阳系软件系列中的 Windows 桌面端语言学习应用。初�
 
 ## 当前阶段
 
-**M3：听力与媒体模块已完成。**
+**M4：朗读与口语模块已完成。**
 
 M1 已实现并验收：极简 Logo「双面之门（Janus Gate）」、Janus Iris + Trial Brass 主题 Token、Tauri 2 + React 19 + TypeScript + Vite 8 Windows 桌面壳、自定义标题栏与窗口交互、模块导航（`Ctrl+1` 至 `Ctrl+6`）与 `Ctrl+K` 搜索、1360×820 / 1040×700 响应式验收。
 
@@ -33,6 +33,17 @@ M3 新增并验收：
 - 片段删除：删除音频文件与听写记录，并写入墓碑表防止重启后种子片段复活；
 - asset 协议：通过 Tauri `assetProtocol` 安全提供本地媒体文件，不暴露绝对路径给前端组件；
 - 回归：Rust 12 项单元/集成测试 + 前端 8 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
+
+M4 新增并验收：
+
+- 麦克风录音：`getUserMedia` → AudioContext 捕获，重采样至 16kHz mono PCM16 WAV，录音仅存内存、不落盘，页面卸载自动释放麦克风；
+- 离线 ASR：whisper.cpp tiny.en 本地转写（whisper-rs 0.16），无 API 成本；`scripts/download-whisper-model.ps1` 下载约 77MB 模型至 `src-tauri/models/`（不随仓库分发），缺失时 UI 展示下载指引；
+- 逐句跟读：复用听力片段库，参考音频逐句播放、录音、回放、重录与切换片段重置；
+- 词级对齐反馈：后端 Rust DP 对齐 expected/transcribed，输出正确/漏读/替换/多读词级标记、准确率与置信度，前端不自行评分；
+- 低置信度策略：ASR 不确定时明确提示“模型不确定”，不直接判错；
+- 朗读统计：累计/今日朗读、平均准确率、低置信次数与薄弱句段；
+- 数据记录：SQLite 迁移 v3 新增 `speaking_attempts` 表，仅存转写文本、指标与置信度，原始录音永不持久化；
+- 回归：Rust 19 项单元/集成测试 + 前端 10 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test`、`cargo check --examples` 通过。
 
 ## 快速开始
 
@@ -65,6 +76,7 @@ pnpm dev
 | `pnpm test` | 运行 Vitest 测试 |
 | `pnpm build` | 类型检查并生成前端生产构建 |
 | `pnpm tauri build` | 生成 Windows 安装包与可执行产物 |
+| `powershell -ExecutionPolicy Bypass -File scripts\download-whisper-model.ps1` | 下载离线 ASR 模型（whisper tiny.en，约 77MB）至 `src-tauri/models/` |
 
 Windows 打包产物位于 `src-tauri/target/release/bundle/`。
 
@@ -93,11 +105,14 @@ Janus/
   design/              # 设计规范、Token 与高保真预览
   docs/                # 开发流程、功能与技术方案
   src/                 # React UI、组件、页面与样式
-    lib/api.ts         # typed IPC 与统一错误模型（M2/M3）
-    pages/             # Words/Sentences/Listening/Notebook/Analytics 学习页（M2/M3）
+    lib/api.ts         # typed IPC 与统一错误模型（M2–M4）
+    lib/recorder.ts    # 麦克风录音：16kHz mono PCM16 WAV，仅内存（M4）
+    pages/             # Words/Sentences/Listening/Speaking/Notebook/Analytics 学习页（M2–M4）
     styles/learning.css# 学习闭环样式（仅语义 Token）
+  scripts/             # download-whisper-model.ps1 离线 ASR 模型下载（M4）
   src-tauri/           # Tauri/Rust 壳层、窗口命令与权限
-    src/db.rs          # SQLite 迁移、SRS、听力/听写、事件、导出与备份（M2/M3）
+    src/asr.rs         # 离线 whisper ASR 转写（M4）
+    src/db.rs          # SQLite 迁移、SRS、听力/听写/朗读、事件、导出与备份（M2–M4）
   dist/                # Vite 生产构建，可重新生成
 ```
 
@@ -115,15 +130,15 @@ Janus/
 
 ## 当前边界
 
-- 单词（SRS 复习队列、评分、生词本）、句子（主动回忆、对/错事件）与听力（播放/变速/逐句循环/听写）已形成本地学习闭环；
-- 朗读与 AI 对话尚未接入：无录音、ASR、TTS、发音评分与云端服务；
+- 单词（SRS 复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）与朗读（录音、离线 ASR、逐词反馈）已形成本地学习闭环；
+- AI 实时语音对话尚未接入：无 TTS、发音评分（音素/韵律）与云端服务；
 - 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分、模拟 AI 对话或任何密钥配置；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）。
 
-## 下一步：M4
+## 下一步：M5
 
-M4 聚焦朗读与口语：麦克风权限流程、VAD、录音回放、流式/分段 ASR 与基础发音反馈。
+M5 聚焦 AI 实时语音对话：场景脚本与角色 Prompt、流式 ASR → LLM → TTS、打断与状态机、会话内纠错、会话后总结与复习入口，以及超时/断网/无麦克风的降级。
 
 ## 设计边界
 
@@ -134,4 +149,4 @@ M4 聚焦朗读与口语：麦克风权限流程、VAD、录音回放、流式/�
 
 ## 验证状态
 
-截至 2026-11-20，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 12 项 + 前端 8 项）。
+截至 2026-11-20，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 19 项 + 前端 10 项）。

@@ -1178,3 +1178,390 @@
     flex-direction: column;
   }
 }
+
+/* ============================================================
+ * M4 · 朗读与发音反馈
+ * 模型状态 / 录音 / 逐词反馈 / 统计
+ * ============================================================ */
+
+.model-setup {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-card);
+  background: var(--warning-soft);
+}
+
+.model-setup > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--warning);
+}
+
+.model-setup h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.model-setup p {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.model-setup code {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-raised);
+  color: var(--text);
+  font: 500 12px/18px var(--font-mono);
+}
+
+.model-setup .model-setup-hint {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.model-setup .button-secondary {
+  flex: none;
+  margin-left: auto;
+}
+
+.speaking-page .page-tip {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.speaking-page .page-tip button {
+  margin-left: 8px;
+  padding: 0;
+  background: none;
+  color: var(--accent-ink);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.speaking-page .page-tip button:hover {
+  text-decoration: underline;
+}
+
+/* ---- 句段列表 ---- */
+
+.speaking-segment {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.speaking-segment + .speaking-segment {
+  margin-top: 8px;
+}
+
+.speaking-segment.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.speaking-seq {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 40px;
+  color: var(--text-3);
+  background: none;
+  font: 600 11px/16px var(--font-mono);
+}
+
+.speaking-seq:hover {
+  color: var(--accent-ink);
+}
+
+.speaking-segment-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.speaking-segment-copy b {
+  display: block;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.speaking-segment-copy p {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.speaking-practice {
+  flex: none;
+  min-width: 64px;
+}
+
+.speaking-practice.active {
+  box-shadow: none;
+}
+
+/* ---- 练习面板 ---- */
+
+.speaking-panel {
+  margin-top: 20px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-1);
+}
+
+.speaking-target {
+  margin-bottom: 16px;
+}
+
+.speaking-target h3 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 26px;
+}
+
+.speaking-target p:not(.eyebrow) {
+  margin: 0 0 12px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.recorder-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 18px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg-subtle);
+}
+
+.recorder-button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 120px;
+  height: 88px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+
+.recorder-button:hover {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.recorder-button:active {
+  transform: scale(.98);
+}
+
+.recorder-button.recording {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.recorder-button.recording:hover {
+  background: var(--danger);
+  color: var(--text-inverse);
+}
+
+.recorder-button.replay {
+  flex: none;
+  width: 56px;
+  height: 56px;
+}
+
+.recorder-recorded {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+}
+
+.recorder-recorded-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.recorder-recorded-copy b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.recorder-recorded-copy p {
+  margin: 2px 0 0;
+  color: var(--text-2);
+  font: 500 11px/16px var(--font-mono);
+}
+
+.recorder-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 11px;
+  line-height: 16px;
+  text-align: center;
+}
+
+.evaluating-hint {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+/* ---- 评测结果 ---- */
+
+.speaking-result {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+}
+
+.speaking-result-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.speaking-result-head h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.confidence-badge {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--fill-soft);
+  color: var(--text-3);
+  font: 600 10px/16px var(--font-mono);
+}
+
+.low-confidence-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius-control);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.word-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.word-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.word-chip i {
+  font: 500 9px/14px var(--font-mono);
+  font-style: normal;
+  letter-spacing: .03em;
+}
+
+.word-chip.correct {
+  border-color: var(--success);
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.word-chip.missing {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+  text-decoration: line-through;
+}
+
+.word-chip.changed {
+  border-color: var(--warning);
+  background: var(--warning-soft);
+  color: var(--warning);
+}
+
+.word-chip.extra {
+  border-color: var(--gold);
+  background: var(--gold-soft);
+  color: var(--gold-ink);
+}
+
+.speaking-transcript {
+  margin-top: 14px;
+}
+
+.speaking-transcript p:last-child {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.speaking-result > .button-secondary {
+  margin-top: 16px;
+}

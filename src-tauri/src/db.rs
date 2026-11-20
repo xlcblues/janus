@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::seed_audio::{wav_duration_ms, SEED_CLIPS};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS words (
@@ -159,6 +159,26 @@ CREATE TABLE IF NOT EXISTS deleted_seed_clips (
 
 CREATE INDEX IF NOT EXISTS idx_listening_segments_clip ON listening_segments(clip_id, seq);
 CREATE INDEX IF NOT EXISTS idx_dictation_attempts_clip ON dictation_attempts(clip_id, created_at);
+"#;
+
+const MIGRATION_3: &str = r#"
+CREATE TABLE IF NOT EXISTS speaking_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL REFERENCES listening_clips(id) ON DELETE CASCADE,
+    segment_id INTEGER NOT NULL REFERENCES listening_segments(id) ON DELETE CASCADE,
+    expected TEXT NOT NULL,
+    transcribed TEXT NOT NULL,
+    word_matches INTEGER NOT NULL,
+    word_total INTEGER NOT NULL,
+    accuracy_percent INTEGER NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    low_confidence INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_speaking_attempts_segment ON speaking_attempts(segment_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_speaking_attempts_clip ON speaking_attempts(clip_id, created_at);
 "#;
 
 
@@ -380,6 +400,49 @@ pub struct DeleteResult {
 }
 
 
+#[derive(Debug, Clone, Serialize)]
+pub struct WordFeedback {
+    pub word: String,
+    /// "correct" | "missing" | "changed" | "extra"
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeakingResult {
+    pub id: i64,
+    pub clip_id: i64,
+    pub segment_id: i64,
+    pub expected: String,
+    pub transcribed: String,
+    pub word_matches: i64,
+    pub word_total: i64,
+    pub accuracy_percent: i64,
+    pub confidence: f64,
+    pub low_confidence: bool,
+    pub duration_ms: i64,
+    pub created_at: i64,
+    pub words: Vec<WordFeedback>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeakingWeakSegment {
+    pub segment_id: i64,
+    pub clip_id: i64,
+    pub title: String,
+    pub attempts: i64,
+    pub accuracy_percent: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SpeakingStats {
+    pub total_attempts: i64,
+    pub today_attempts: i64,
+    pub accuracy_percent: i64,
+    pub low_confidence_attempts: i64,
+    pub total_duration_ms: i64,
+    pub weakest_segments: Vec<SpeakingWeakSegment>,
+}
+
 #[derive(Debug, Clone)]
 struct SrsState {
     stage: String,
@@ -418,6 +481,12 @@ fn migrate(conn: &mut Connection) -> SqliteResult<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(MIGRATION_2)?;
         tx.execute_batch("PRAGMA user_version = 2;")?;
+        tx.commit()?;
+    }
+    if version < 3 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_3)?;
+        tx.execute_batch("PRAGMA user_version = 3;")?;
         tx.commit()?;
     }
     Ok(())
@@ -1179,6 +1248,254 @@ fn seed_index_from_file_name(file_name: &str) -> Option<i64> {
     }
 }
 
+/// Normalize spoken text for comparison: lowercase, keep alphanumeric
+/// characters, collapse whitespace and drop punctuation so "It depends."
+/// compares equal to "it depends".
+fn normalize_speaking_text(text: &str) -> String {
+    let mut normalized = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            for lower in ch.to_lowercase() {
+                normalized.push(lower);
+            }
+        } else if ch.is_whitespace() {
+            if !normalized.ends_with(' ') {
+                normalized.push(' ');
+            }
+        }
+    }
+    normalized.trim_end().to_string()
+}
+
+fn tokenize_speaking(text: &str) -> Vec<String> {
+    normalize_speaking_text(text)
+        .split_whitespace()
+        .map(|token| token.to_string())
+        .collect()
+}
+
+/// Word-level alignment between expected and transcribed tokens.
+///
+/// Uses dynamic programming over tokens (LCS with substitutions); backtracking
+/// produces per-word feedback for the UI:
+/// - "correct": expected word matched verbatim;
+/// - "missing": expected word was not spoken;
+/// - "changed": expected word was spoken differently;
+/// - "extra": an unexpected word was spoken.
+fn align_words(expected: &[String], transcribed: &[String]) -> Vec<WordFeedback> {
+    let n = expected.len();
+    let m = transcribed.len();
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in 1..=n {
+        for j in 1..=m {
+            let hit = usize::from(expected[i - 1] == transcribed[j - 1]);
+            dp[i][j] = dp[i - 1][j]
+                .max(dp[i][j - 1])
+                .max(dp[i - 1][j - 1] + hit);
+        }
+    }
+
+    enum Kind {
+        Correct,
+        Missing,
+        Changed,
+        Extra,
+    }
+
+    let mut events = Vec::new();
+    let mut i = n;
+    let mut j = m;
+    while i > 0 && j > 0 {
+        let hit = expected[i - 1] == transcribed[j - 1];
+        if hit && dp[i][j] == dp[i - 1][j - 1] + 1 {
+            events.push((Kind::Correct, expected[i - 1].clone()));
+            i -= 1;
+            j -= 1;
+        } else if dp[i][j] == dp[i - 1][j - 1] {
+            // Tie-breaking: a substitution reads more clearly to learners
+            // than an "extra + missing" pair when both achieve the same score.
+            events.push((Kind::Changed, expected[i - 1].clone()));
+            i -= 1;
+            j -= 1;
+        } else if dp[i][j] == dp[i - 1][j] {
+            events.push((Kind::Missing, expected[i - 1].clone()));
+            i -= 1;
+        } else if dp[i][j] == dp[i][j - 1] {
+            events.push((Kind::Extra, transcribed[j - 1].clone()));
+            j -= 1;
+        } else {
+            events.push((Kind::Changed, expected[i - 1].clone()));
+            i -= 1;
+            j -= 1;
+        }
+    }
+    while i > 0 {
+        events.push((Kind::Missing, expected[i - 1].clone()));
+        i -= 1;
+    }
+    while j > 0 {
+        events.push((Kind::Extra, transcribed[j - 1].clone()));
+        j -= 1;
+    }
+    events.reverse();
+
+    events
+        .into_iter()
+        .map(|(kind, word)| WordFeedback {
+            status: match kind {
+                Kind::Correct => "correct",
+                Kind::Missing => "missing",
+                Kind::Changed => "changed",
+                Kind::Extra => "extra",
+            }
+            .to_string(),
+            word,
+        })
+        .collect()
+}
+
+/// Record one speaking attempt. The backend aligns the ASR transcription
+/// against the stored segment text, computes word-level feedback and stores
+/// only text + metrics (raw recordings are never persisted).
+pub fn record_speaking_attempt(
+    conn: &mut Connection,
+    clip_id: i64,
+    segment_id: i64,
+    transcribed: String,
+    confidence: f64,
+    low_confidence: bool,
+    duration_ms: i64,
+) -> Result<SpeakingResult, AppError> {
+    let expected = conn
+        .query_row(
+            "SELECT text_en FROM listening_segments WHERE id = ?1 AND clip_id = ?2",
+            params![segment_id, clip_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::NotFound("没有找到这个朗读片段。".to_string()))?;
+    let expected_tokens = tokenize_speaking(&expected);
+    let transcribed_tokens = tokenize_speaking(&transcribed);
+    let words = align_words(&expected_tokens, &transcribed_tokens);
+    let word_total = expected_tokens.len() as i64;
+    let word_matches = words
+        .iter()
+        .filter(|word| word.status == "correct")
+        .count() as i64;
+    let accuracy_percent = if word_total > 0 {
+        word_matches * 100 / word_total
+    } else {
+        0
+    };
+    let now = now_secs();
+    conn.execute(
+        "INSERT INTO speaking_attempts (clip_id, segment_id, expected, transcribed, word_matches, word_total, accuracy_percent, confidence, low_confidence, duration_ms, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![
+            clip_id,
+            segment_id,
+            expected,
+            transcribed,
+            word_matches,
+            word_total,
+            accuracy_percent,
+            confidence,
+            low_confidence as i64,
+            duration_ms,
+            now
+        ],
+    )?;
+    Ok(SpeakingResult {
+        id: conn.last_insert_rowid(),
+        clip_id,
+        segment_id,
+        expected,
+        transcribed,
+        word_matches,
+        word_total,
+        accuracy_percent,
+        confidence,
+        low_confidence,
+        duration_ms,
+        created_at: now,
+        words,
+    })
+}
+
+pub fn get_speaking_stats(conn: &Connection) -> Result<SpeakingStats, AppError> {
+    let now = now_secs();
+    let today_start = now - (now % 86400);
+    let total_attempts: i64 =
+        conn.query_row("SELECT COUNT(*) FROM speaking_attempts", [], |row| row.get(0))?;
+    let today_attempts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM speaking_attempts WHERE created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let total_matches: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(word_matches), 0) FROM speaking_attempts",
+        [],
+        |row| row.get(0),
+    )?;
+    let total_words: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(word_total), 0) FROM speaking_attempts",
+        [],
+        |row| row.get(0),
+    )?;
+    let low_confidence_attempts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM speaking_attempts WHERE low_confidence = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let total_duration_ms: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(duration_ms), 0) FROM speaking_attempts",
+        [],
+        |row| row.get(0),
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.clip_id, c.title, COUNT(a.id) AS attempts, COALESCE(SUM(a.word_matches), 0) AS matches, COALESCE(SUM(a.word_total), 0) AS words
+         FROM listening_segments s
+         JOIN listening_clips c ON c.id = s.clip_id
+         LEFT JOIN speaking_attempts a ON a.segment_id = s.id
+         GROUP BY s.id
+         HAVING attempts > 0
+         ORDER BY (CASE WHEN words > 0 THEN CAST(matches AS REAL) / words ELSE 1 END) ASC, attempts DESC
+         LIMIT 5",
+    )?;
+    let weakest_segments = stmt
+        .query_map([], |row| {
+            let attempts: i64 = row.get(3)?;
+            let matches: i64 = row.get(4)?;
+            let words: i64 = row.get(5)?;
+            Ok(SpeakingWeakSegment {
+                segment_id: row.get(0)?,
+                clip_id: row.get(1)?,
+                title: row.get(2)?,
+                attempts,
+                accuracy_percent: if words > 0 {
+                    matches * 100 / words
+                } else {
+                    0
+                },
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+
+    Ok(SpeakingStats {
+        total_attempts,
+        today_attempts,
+        accuracy_percent: if total_words > 0 {
+            total_matches * 100 / total_words
+        } else {
+            0
+        },
+        low_confidence_attempts,
+        total_duration_ms,
+        weakest_segments,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1332,6 +1649,102 @@ mod tests {
             .unwrap();
         assert_eq!(count, 19);
     }
+    #[test]
+    fn speaking_alignment_marks_feedback() {
+        let expected = tokenize_speaking("It depends on how you look at it.");
+        let transcribed = tokenize_speaking("it depends how you look at this");
+        let words = align_words(&expected, &transcribed);
+        let statuses: Vec<&str> = words.iter().map(|word| word.status.as_str()).collect();
+        assert_eq!(
+            statuses,
+            vec![
+                "correct", "correct", "missing", "correct", "correct", "correct", "correct", "changed"
+            ]
+        );
+        assert_eq!(
+            words.iter().filter(|word| word.status == "correct").count(),
+            6
+        );
+    }
+
+    #[test]
+    fn speaking_extra_words_are_marked() {
+        let expected = tokenize_speaking("Could you say that again");
+        let transcribed = tokenize_speaking("could you please say that again please");
+        let words = align_words(&expected, &transcribed);
+        let extra: Vec<&str> = words
+            .iter()
+            .filter(|word| word.status == "extra")
+            .map(|word| word.word.as_str())
+            .collect();
+        assert_eq!(extra, vec!["please", "please"]);
+        assert!(words
+            .iter()
+            .all(|word| word.status == "correct" || word.status == "extra"));
+    }
+
+    #[test]
+    fn speaking_attempt_records_and_stats() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let perfect = record_speaking_attempt(
+            &mut conn,
+            1,
+            1,
+            "It depends on how you look at it.".to_string(),
+            0.92,
+            false,
+            4200,
+        )
+        .unwrap();
+        assert_eq!(perfect.word_total, 8);
+        assert_eq!(perfect.word_matches, 8);
+        assert_eq!(perfect.accuracy_percent, 100);
+        assert!(!perfect.low_confidence);
+        assert_eq!(perfect.words.len(), 8);
+        assert!(perfect.words.iter().all(|word| word.status == "correct"));
+
+        let rough = record_speaking_attempt(
+            &mut conn,
+            1,
+            1,
+            "it depends how you look at this".to_string(),
+            0.35,
+            true,
+            3600,
+        )
+        .unwrap();
+        assert_eq!(rough.word_matches, 6);
+        assert_eq!(rough.accuracy_percent, 75);
+        assert!(rough.low_confidence);
+
+        let stats = get_speaking_stats(&conn).unwrap();
+        assert_eq!(stats.total_attempts, 2);
+        assert_eq!(stats.today_attempts, 2);
+        assert_eq!(stats.accuracy_percent, (8 + 6) * 100 / 16);
+        assert_eq!(stats.low_confidence_attempts, 1);
+        assert_eq!(stats.weakest_segments.len(), 1);
+        assert_eq!(stats.weakest_segments[0].segment_id, 1);
+        // The weakest-segment accuracy aggregates both attempts for the segment.
+        assert_eq!(stats.weakest_segments[0].accuracy_percent, 87);
+    }
+
+    #[test]
+    fn speaking_attempt_rejects_missing_segment() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let result = record_speaking_attempt(
+            &mut conn,
+            1,
+            999,
+            "hello".to_string(),
+            0.5,
+            false,
+            1000,
+        );
+        assert!(result.is_err());
+    }
+
 }
 #[test]
 fn file_backed_database_persists_across_reopen() {

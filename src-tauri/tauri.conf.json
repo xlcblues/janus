@@ -41,13 +41,22 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "xlcblues",
+    "category": "Education",
     "icon": [
       "../assets/brand/janus-app.ico",
       "../assets/brand/icons/janus-app-32.png",
       "../assets/brand/icons/janus-app-128.png"
     ],
     "shortDescription": "越过边界，开口即世界。",
-    "longDescription": "Janus 是太阳系软件系列中的 Windows 桌面语言学习工作台。"
+    "longDescription": "Janus 是太阳系软件系列中的 Windows 桌面语言学习工作台。",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["SimpChinese"],
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

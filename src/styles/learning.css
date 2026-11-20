@@ -2338,6 +2338,44 @@
   font-size: 11px;
   line-height: 18px;
 }
+.settings-about-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.settings-about-label {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-about-value {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.settings-about-path {
+  font: 500 10px/16px var(--font-mono);
+  color: var(--text-3);
+}
+
+.update-action-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.settings-update-ok {
+  color: var(--accent-ink);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 
 
 @media (max-width: 1180px) {

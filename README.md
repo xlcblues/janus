@@ -6,7 +6,7 @@ Janus 是太阳系软件系列中的 Windows 桌面端语言学习应用。初�
 
 ## 当前阶段
 
-**M7：Beta 加固已完成（桌面复习提醒 + 语音设备选择）。**
+**M8：发布候选已完成（版本与更新 + NSIS 安装包配置）。**
 
 M1 已实现并验收：极简 Logo「双面之门（Janus Gate）」、Janus Iris + Trial Brass 主题 Token、Tauri 2 + React 19 + TypeScript + Vite 8 Windows 桌面壳、自定义标题栏与窗口交互、模块导航（`Ctrl+1` 至 `Ctrl+6`）与 `Ctrl+K` 搜索、1360×820 / 1040×700 响应式验收。
 
@@ -72,6 +72,13 @@ M7 新增并验收：
 - 通知状态与降级提示：展示通知授权状态，已保存设备不可用时明确提示，设备枚举失败静默降级；
 - 回归：Rust 42 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 
+M8 新增并验收：
+
+- 版本与更新：设置页新增「版本与更新」面板，展示应用版本与本地数据目录，可一键检查 GitHub Releases 最新版本（网络超时与失败均有中文降级提示），有新版时直接跳转下载页；
+- 版本比较：Rust `update.rs` 纯函数解析/比较版本号（支持 v 前缀与预发布后缀），网络请求与判断逻辑分离，单元测试覆盖新版本/旧版本/等值版本与异常载荷；
+- NSIS 安装包：`tauri.conf.json` 切换 bundle 目标为 `nsis`（当前用户安装、简体中文、隐藏语言选择器），`pnpm tauri build` 产出 Windows 安装程序与免安装产物；
+- 回归：Rust 48 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test`、`cargo check --examples`、`pnpm tauri build` 通过。
+
 ## 快速开始
 
 环境要求：
@@ -132,15 +139,16 @@ Janus/
   design/              # 设计规范、Token 与高保真预览
   docs/                # 开发流程、功能与技术方案
   src/                 # React UI、组件、页面与样式
-    lib/api.ts         # typed IPC 与统一错误模型（M2–M7）
+    lib/api.ts         # typed IPC 与统一错误模型（M2–M8）
     lib/recorder.ts    # 麦克风录音：16kHz mono PCM16 WAV，仅内存；设备枚举与选择（M4/M7）
-    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M7）
-    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M7）
+    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M8）
+    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M8）
   scripts/             # download-whisper-model.ps1 离线 ASR 模型下载（M4）
   src-tauri/           # Tauri/Rust 壳层、窗口命令与权限
     src/asr.rs         # 离线 whisper ASR 转写（M4）
     src/llm.rs         # OpenAI 兼容 AI 网关：超时/重试/中文错误映射（M5）
     src/reminder.rs    # 每日复习提醒调度：本地时间计算与通知触发（M7）
+    src/update.rs       # 版本比较与 GitHub Releases 更新检查（M8）
     src/db.rs          # SQLite 迁移、SRS、听力/听写/朗读/对话、事件、计划/提醒/语音设备与备份（M2–M7）
   dist/                # Vite 生产构建，可重新生成
 ```
@@ -160,14 +168,16 @@ Janus/
 ## 当前边界
 
 - 单词（SRS 复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
-- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M8+ 规划；
+- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M9 规划；
 - 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分或模拟 AI 数据；AI 密钥只存本地数据库，不进前端构建；
+- 版本与更新：更新检查基于 GitHub Releases（`xlcblues/janus`），需要联网；无新版、网络失败或平台不支持均有明确中文降级提示；
+- 发布产物：NSIS 安装程序已产出（当前用户安装、简体中文），尚未代码签名，干净机器安装/卸载/升级 E2E 与商店/官网发布留待 M9；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）。
 
-## 下一步：M8
+## 下一步：M9
 
-M8 聚焦 AI 对话的实时链路与发布准备：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，随后进入发布候选（Windows 签名与安装包）。
+M9 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，以及 Windows 代码签名、干净机器安装/升级/回滚专项验证与发布检查清单。
 
 ## 设计边界
 

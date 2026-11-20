@@ -3,6 +3,7 @@ mod db;
 mod llm;
 mod reminder;
 mod seed_audio;
+mod update;
 
 use crate::asr::AsrEngine;
 use rusqlite::Connection;
@@ -636,6 +637,42 @@ fn send_test_notification(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn get_app_version(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(app.package_info().version.to_string())
+}
+
+#[tauri::command]
+fn get_app_data_dir(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    Ok(state.data_dir.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn check_for_update(app: tauri::AppHandle) -> Result<update::UpdateCheck, String> {
+    let current = app.package_info().version.to_string();
+    update::check_for_update(&current, "xlcblues/janus")
+}
+
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("仅支持打开 http(s) 链接。".to_string());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn()
+            .map_err(|error| format!("无法打开链接：{error}"))?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = url;
+        return Err("当前平台暂不支持打开外部链接。".to_string());
+    }
+    Ok(())
+}
+
+#[tauri::command]
 fn save_reminder_settings(
     state: tauri::State<'_, AppState>,
     settings: db::ReminderSettings,
@@ -732,7 +769,11 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             get_microphone_settings,
             save_microphone_settings,
             get_notification_permission,
-            send_test_notification
+            send_test_notification,
+            get_app_version,
+            get_app_data_dir,
+            check_for_update,
+            open_url
         ])
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, CalendarCheck, CloudOff, Mic, Save } from "lucide-react";
+import { Bell, CalendarCheck, CloudOff, Download, Mic, Save } from "lucide-react";
 import {
   api,
   emptyMicrophoneSettings,
@@ -7,7 +7,7 @@ import {
   emptyStudyPlan,
   toUserMessage,
 } from "../lib/api";
-import type { MicrophoneSettings, ReminderSettings, StudyPlan } from "../lib/api";
+import type { MicrophoneSettings, ReminderSettings, StudyPlan, UpdateCheck } from "../lib/api";
 import { listMicrophoneDevices, probeMicrophoneDevices } from "../lib/recorder";
 import type { MicrophoneDevice } from "../lib/recorder";
 
@@ -45,6 +45,11 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [testingNotification, setTestingNotification] = useState(false);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [appDataDir, setAppDataDir] = useState<string | null>(null);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -79,6 +84,18 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
       .getNotificationPermission()
       .then((state) => setNotificationState(state))
       .catch(() => setNotificationState(null));
+  }, []);
+
+  useEffect(() => {
+    Promise.all([api.getAppVersion(), api.getAppDataDir()])
+      .then(([version, dataDir]) => {
+        setAppVersion(version);
+        setAppDataDir(dataDir);
+      })
+      .catch(() => {
+        setAppVersion(null);
+        setAppDataDir(null);
+      });
   }, []);
 
   useEffect(() => {
@@ -124,6 +141,25 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
     }
   };
 
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateError(null);
+    setUpdateCheck(null);
+    try {
+      const result = await api.checkForUpdate();
+      setUpdateCheck(result);
+    } catch (error) {
+      setUpdateError(toUserMessage(error));
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleOpenDownload = () => {
+    if (!updateCheck?.download_url) return;
+    api.openUrl(updateCheck.download_url).catch((error) => setUpdateError(toUserMessage(error)));
+  };
+
   const handleSave = async () => {
     setBusy(true);
     try {
@@ -144,7 +180,7 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
     <div className="learning-page">
       <section className="page-heading learning-heading">
         <div>
-          <p className="eyebrow">设置 · M7</p>
+          <p className="eyebrow">设置 · M8</p>
           <h1>设置</h1>
           <p>学习计划、复习提醒、语音设备与数据边界。所有设置仅保存在本地数据库。</p>
         </div>
@@ -307,6 +343,52 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
                 ? `已检测到 ${devices.length} 个输入设备。`
                 : "尚未检测到输入设备；点击「检测设备」授权后可查看具体名称。"}
             </p>
+          </div>
+        </section>
+
+        <section className="panel settings-panel" aria-labelledby="update-title">
+          <div className="panel-heading">
+            <Download size={16} />
+            <b id="update-title">版本与更新</b>
+            <span>release</span>
+          </div>
+          <div className="settings-panel-body">
+            <p className="settings-hint">查看当前版本与数据目录；有新版时可跳转 GitHub Releases 下载。</p>
+            <div className="settings-about-row">
+              <span className="settings-about-label">应用版本</span>
+              <span className="settings-about-value">{appVersion ?? "仅桌面应用可用"}</span>
+            </div>
+            <div className="settings-about-row">
+              <span className="settings-about-label">数据目录</span>
+              <span className="settings-about-value settings-about-path" title={appDataDir ?? undefined}>
+                {appDataDir ?? "仅桌面应用可用"}
+              </span>
+            </div>
+            <div className="update-action-row">
+              <button
+                type="button"
+                className="button-secondary"
+                onClick={() => void handleCheckUpdate()}
+                disabled={checkingUpdate}
+              >
+                {checkingUpdate ? "检查中…" : "检查更新"}
+              </button>
+              {updateCheck ? (
+                updateCheck.has_update ? (
+                  <button type="button" className="button-primary" onClick={() => void handleOpenDownload()}>
+                    前往下载 v{updateCheck.latest}
+                  </button>
+                ) : (
+                  <span className="settings-update-ok">已是最新版本 v{updateCheck.latest}</span>
+                )
+              ) : null}
+            </div>
+            {updateCheck?.published_at ? (
+              <p className="settings-mic-hint">
+                最新版本发布于 {new Date(updateCheck.published_at).toLocaleDateString("zh-CN")}。
+              </p>
+            ) : null}
+            {updateError ? <p className="settings-mic-hint">{updateError}</p> : null}
           </div>
         </section>
 

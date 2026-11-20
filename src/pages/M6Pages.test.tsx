@@ -20,6 +20,8 @@ describe("M6 data & settings pages", () => {
     expect(screen.getByText("microphone")).toBeInTheDocument();
     expect(screen.getAllByText(/桌面通知/).length).toBeGreaterThan(0);
     expect(screen.getByText(/系统默认麦克风/)).toBeInTheDocument();
+    expect(screen.getByText("版本与更新")).toBeInTheDocument();
+    expect(screen.getByText("检查更新")).toBeInTheDocument();
     expect(screen.getByText(/云同步接口将在后续里程碑接入/)).toBeInTheDocument();
   });
 });

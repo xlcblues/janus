@@ -340,6 +340,14 @@ export interface MicrophoneSettings {
 
 export type NotificationPermissionState = "granted" | "denied" | "prompt";
 
+export interface UpdateCheck {
+  current: string;
+  latest: string;
+  has_update: boolean;
+  download_url: string;
+  published_at: string | null;
+}
+
 export interface TodayProgress {
   word_reviews: number;
   sentences: number;
@@ -520,6 +528,10 @@ export const api = {
     invokeCommand<void>("save_microphone_settings", { settings }),
   getNotificationPermission: () =>
     invokeCommand<NotificationPermissionState>("get_notification_permission"),
-  sendTestNotification: () => invokeCommand<void>("send_test_notification")
+  sendTestNotification: () => invokeCommand<void>("send_test_notification"),
+  getAppVersion: () => invokeCommand<string>("get_app_version"),
+  getAppDataDir: () => invokeCommand<string>("get_app_data_dir"),
+  checkForUpdate: () => invokeCommand<UpdateCheck>("check_for_update"),
+  openUrl: (url: string) => invokeCommand<void>("open_url", { url })
 };
 

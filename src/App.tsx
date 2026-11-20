@@ -12,6 +12,7 @@ import { SpeakingPage } from "./pages/SpeakingPage";
 import { ConversationPage } from "./pages/ConversationPage";
 import { NotebookPage } from "./pages/NotebookPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { navItems } from "./data/navigation";
 import type { NavId } from "./data/navigation";
 import { applyTheme, getInitialTheme, nextTheme } from "./lib/theme";
@@ -123,6 +124,8 @@ export default function App() {
             <NotebookPage onNotify={setToast} />
           ) : activeId === "analytics" ? (
             <AnalyticsPage onNotify={setToast} />
+          ) : activeId === "settings" ? (
+            <SettingsPage onNotify={setToast} />
           ) : (
             <ModulePage id={activeItem.id} onNavigate={navigate} onNotify={setToast} />
           )}

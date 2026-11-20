@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::seed_audio::{wav_duration_ms, SEED_CLIPS};
 
-pub const SCHEMA_VERSION: i64 = 4;
+pub const SCHEMA_VERSION: i64 = 5;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS words (
@@ -232,7 +232,12 @@ INSERT OR IGNORE INTO conversation_scenes (id, title, goal, role, user_goal, tar
     (5, '周末计划', '练习谈论周末安排与回应邀约。', '你是朋友 Sam，轻松随意，会追问细节。', '聊一聊周末计划并回应邀约。', 'plan, weekend, invite, join, free', 'a2', 'Hey! What are you planning to do this weekend?', 'en');
 "#;
 
-
+const MIGRATION_5: &str = r#"
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+"#;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -545,6 +550,12 @@ fn migrate(conn: &mut Connection) -> SqliteResult<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(MIGRATION_4)?;
         tx.execute_batch("PRAGMA user_version = 4;")?;
+        tx.commit()?;
+    }
+    if version < 5 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_5)?;
+        tx.execute_batch("PRAGMA user_version = 5;")?;
         tx.commit()?;
     }
     Ok(())
@@ -2053,6 +2064,508 @@ pub fn correction_to_json(correction: Option<&Correction>) -> String {
     }
 }
 
+
+/* ============================================================
+ * M6 · 数据、复习与计划
+ * 周趋势 / 掌握度 / 错题聚合 / 学习计划与提醒 / 今日进度
+ * ============================================================ */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyStat {
+    pub day_start: i64,
+    pub reviews: i64,
+    pub dictations: i64,
+    pub speaking: i64,
+    pub conversation_turns: i64,
+    pub duration_min: i64,
+    pub accuracy_percent: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StageCount {
+    pub stage: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MasteryProgress {
+    pub word_stages: Vec<StageCount>,
+    pub sentence_statuses: Vec<StageCount>,
+    pub learned_words: i64,
+    pub mastered_words: i64,
+    pub vocabulary_count: i64,
+    pub mastery_percent: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CorrectionEntry {
+    pub session_id: i64,
+    pub scene_title: String,
+    pub original: String,
+    pub suggestion: String,
+    pub note: String,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WeakWord {
+    pub word_id: i64,
+    pub word: String,
+    pub meaning: String,
+    pub wrong_count: i64,
+    pub total_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MistakeBook {
+    pub weak_dictation: Vec<WeakClip>,
+    pub weak_speaking: Vec<SpeakingWeakSegment>,
+    pub conversation_corrections: Vec<CorrectionEntry>,
+    pub low_score_words: Vec<WeakWord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StudyPlan {
+    pub enabled: bool,
+    pub word_target: i64,
+    pub sentence_target: i64,
+    pub listening_target: i64,
+    pub speaking_target: i64,
+    pub conversation_target: i64,
+    pub duration_min_target: i64,
+}
+
+impl Default for StudyPlan {
+    fn default() -> Self {
+        StudyPlan {
+            enabled: true,
+            word_target: 10,
+            sentence_target: 5,
+            listening_target: 3,
+            speaking_target: 3,
+            conversation_target: 4,
+            duration_min_target: 18,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReminderSettings {
+    pub enabled: bool,
+    pub hour: i64,
+    pub minute: i64,
+}
+
+impl Default for ReminderSettings {
+    fn default() -> Self {
+        ReminderSettings {
+            enabled: true,
+            hour: 20,
+            minute: 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TodayProgress {
+    pub word_reviews: i64,
+    pub sentences: i64,
+    pub dictations: i64,
+    pub speaking: i64,
+    pub conversation_turns: i64,
+    pub duration_min: i64,
+    pub due_words: i64,
+    pub streak_days: i64,
+    pub plan_percent: i64,
+    pub plan: StudyPlan,
+}
+
+const STUDY_PLAN_KEY: &str = "study_plan";
+const REMINDER_KEY: &str = "reminder";
+
+fn read_setting<T>(conn: &Connection, key: &str) -> Result<T, AppError>
+where
+    T: Default + for<'de> Deserialize<'de>,
+{
+    let raw: Option<String> = conn
+        .query_row("SELECT value FROM app_settings WHERE key = ?1", [key], |row| row.get(0))
+        .optional()?;
+    match raw {
+        Some(json) => serde_json::from_str(&json).map_err(AppError::from),
+        None => Ok(T::default()),
+    }
+}
+
+fn write_setting<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Result<(), AppError> {
+    let json = serde_json::to_string(value)?;
+    conn.execute(
+        "INSERT INTO app_settings(key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        params![key, json],
+    )?;
+    Ok(())
+}
+
+pub fn get_study_plan(conn: &Connection) -> Result<StudyPlan, AppError> {
+    read_setting(conn, STUDY_PLAN_KEY)
+}
+
+pub fn save_study_plan(conn: &Connection, plan: &StudyPlan) -> Result<(), AppError> {
+    write_setting(conn, STUDY_PLAN_KEY, plan)
+}
+
+pub fn get_reminder_settings(conn: &Connection) -> Result<ReminderSettings, AppError> {
+    read_setting(conn, REMINDER_KEY)
+}
+
+pub fn save_reminder_settings(
+    conn: &Connection,
+    settings: &ReminderSettings,
+) -> Result<(), AppError> {
+    write_setting(conn, REMINDER_KEY, settings)
+}
+
+/// 最近 N 天（默认 7）按日聚合的复习/听写/朗读/对话统计。所有数字都从
+/// 本地事件表投影而来，与「今日统计」使用相同的 UTC 日边界保持一致。
+pub fn get_weekly_stats(conn: &Connection, days: Option<i64>) -> Result<Vec<DailyStat>, AppError> {
+    let days = days.unwrap_or(7).clamp(1, 90) as usize;
+    let now = now_secs();
+    let today_start = now - (now % 86400);
+    let start = today_start - ((days as i64 - 1) * 86400);
+    let end = today_start + 86400;
+    let bucket = |ts: i64| -> usize {
+        let index = ((ts - start) / 86400) as usize;
+        index.min(days - 1)
+    };
+
+    let mut reviews = vec![0i64; days];
+    let mut correct = vec![0i64; days];
+    let mut duration_ms = vec![0i64; days];
+    let mut dictations = vec![0i64; days];
+    let mut speaking = vec![0i64; days];
+    let mut conversation_turns = vec![0i64; days];
+
+    let mut study_stmt = conn.prepare(
+        "SELECT created_at, result, duration_ms FROM study_events
+         WHERE kind IN ('word_review', 'sentence_event') AND created_at >= ?1 AND created_at < ?2",
+    )?;
+    let study_rows = study_stmt.query_map(params![start, end], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+    })?;
+    for row in study_rows {
+        let (created_at, result, duration) = row?;
+        let b = bucket(created_at);
+        reviews[b] += 1;
+        correct[b] += result;
+        duration_ms[b] += duration;
+    }
+
+    let mut dict_stmt = conn.prepare(
+        "SELECT created_at, duration_ms FROM dictation_attempts
+         WHERE created_at >= ?1 AND created_at < ?2",
+    )?;
+    let dict_rows = dict_stmt.query_map(params![start, end], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    for row in dict_rows {
+        let (created_at, duration) = row?;
+        let b = bucket(created_at);
+        dictations[b] += 1;
+        duration_ms[b] += duration;
+    }
+
+    let mut speak_stmt = conn.prepare(
+        "SELECT created_at, duration_ms FROM speaking_attempts
+         WHERE created_at >= ?1 AND created_at < ?2",
+    )?;
+    let speak_rows = speak_stmt.query_map(params![start, end], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    for row in speak_rows {
+        let (created_at, duration) = row?;
+        let b = bucket(created_at);
+        speaking[b] += 1;
+        duration_ms[b] += duration;
+    }
+
+    let mut turn_stmt = conn.prepare(
+        "SELECT created_at FROM conversation_messages
+         WHERE role = 'assistant' AND created_at >= ?1 AND created_at < ?2",
+    )?;
+    let turn_rows = turn_stmt.query_map(params![start, end], |row| {
+        Ok(row.get::<_, i64>(0)?)
+    })?;
+    for created_at in turn_rows {
+        let created_at = created_at?;
+        let b = bucket(created_at);
+        conversation_turns[b] += 1;
+    }
+
+    let mut result = Vec::with_capacity(days);
+    for i in 0..days {
+        let accuracy_percent = if reviews[i] > 0 {
+            (correct[i] * 100 / reviews[i]).max(0)
+        } else {
+            0
+        };
+        result.push(DailyStat {
+            day_start: start + (i as i64) * 86400,
+            reviews: reviews[i],
+            dictations: dictations[i],
+            speaking: speaking[i],
+            conversation_turns: conversation_turns[i],
+            duration_min: duration_ms[i] / 60000,
+            accuracy_percent,
+        });
+    }
+    Ok(result)
+}
+
+/// 单词各阶段分布、句子掌握分布与总体掌握度（已开始学习 / 全部单词）。
+pub fn get_mastery_progress(conn: &Connection) -> Result<MasteryProgress, AppError> {
+    let mut word_stmt = conn.prepare(
+        "SELECT stage, COUNT(*) FROM word_states GROUP BY stage ORDER BY
+         CASE stage WHEN 'new' THEN 0 WHEN 'learning' THEN 1 WHEN 'reviewing' THEN 2 ELSE 3 END",
+    )?;
+    let word_stages = word_stmt
+        .query_map([], |row| {
+            Ok(StageCount {
+                stage: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+
+    let mut sentence_stmt = conn.prepare(
+        "SELECT status, COUNT(*) FROM sentence_states GROUP BY status ORDER BY
+         CASE status WHEN 'new' THEN 0 WHEN 'learning' THEN 1 ELSE 2 END",
+    )?;
+    let sentence_statuses = sentence_stmt
+        .query_map([], |row| {
+            Ok(StageCount {
+                stage: row.get(0)?,
+                count: row.get(1)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+
+    let total_words: i64 = conn.query_row("SELECT COUNT(*) FROM words", [], |row| row.get(0))?;
+    let learned_words: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM word_states WHERE stage <> 'new'",
+        [],
+        |row| row.get(0),
+    )?;
+    let mastered_words: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM word_states WHERE stage = 'mastered'",
+        [],
+        |row| row.get(0),
+    )?;
+    let vocabulary_count: i64 = conn.query_row("SELECT COUNT(*) FROM vocabulary", [], |row| {
+        row.get(0)
+    })?;
+
+    Ok(MasteryProgress {
+        word_stages,
+        sentence_statuses,
+        learned_words,
+        mastered_words,
+        vocabulary_count,
+        mastery_percent: if total_words > 0 {
+            (learned_words * 100 / total_words).min(100)
+        } else {
+            0
+        },
+    })
+}
+
+/// 错题/薄弱点聚合：低分单词、听写薄弱片段、朗读薄弱句段与对话纠错。
+/// 每一项都保留出处，用户可回到对应模块查看证据。
+pub fn get_mistake_book(conn: &Connection) -> Result<MistakeBook, AppError> {
+    let dictation_stats = get_dictation_stats(conn)?;
+    let speaking_stats = get_speaking_stats(conn)?;
+
+    let mut correction_stmt = conn.prepare(
+        "SELECT m.session_id, sc.title, m.content, m.correction, m.created_at
+         FROM conversation_messages m
+         JOIN conversation_sessions s ON s.id = m.session_id
+         JOIN conversation_scenes sc ON sc.id = s.scene_id
+         WHERE m.role = 'user'
+           AND m.correction IS NOT NULL
+           AND TRIM(m.correction) <> ''
+           AND m.correction <> '{}'
+         ORDER BY m.created_at DESC
+         LIMIT 10",
+    )?;
+    let correction_rows = correction_stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+        ))
+    })?;
+    let mut conversation_corrections = Vec::new();
+    for row in correction_rows {
+        let (session_id, scene_title, content, raw, created_at) = row?;
+        if let Some(correction) = parse_correction(&raw) {
+            conversation_corrections.push(CorrectionEntry {
+                session_id,
+                scene_title,
+                original: content,
+                suggestion: correction.suggestion,
+                note: correction.note,
+                created_at,
+            });
+        }
+    }
+
+    let mut weak_stmt = conn.prepare(
+        "SELECT w.id, w.word, w.meaning,
+                SUM(CASE WHEN e.result = 0 THEN 1 ELSE 0 END) AS wrong_count,
+                COUNT(*) AS total
+         FROM study_events e
+         JOIN words w ON w.id = e.ref_id
+         WHERE e.kind = 'word_review'
+         GROUP BY w.id
+         HAVING wrong_count >= 2
+         ORDER BY wrong_count DESC, total DESC
+         LIMIT 10",
+    )?;
+    let low_score_words = weak_stmt
+        .query_map([], |row| {
+            Ok(WeakWord {
+                word_id: row.get(0)?,
+                word: row.get(1)?,
+                meaning: row.get(2)?,
+                wrong_count: row.get(3)?,
+                total_count: row.get(4)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+
+    Ok(MistakeBook {
+        weak_dictation: dictation_stats.weakest_clips,
+        weak_speaking: speaking_stats.weakest_segments,
+        conversation_corrections,
+        low_score_words,
+    })
+}
+
+/// 今日各模块进度、计划完成度与连续学习天数。数字全部可追溯到事件。
+pub fn get_today_progress(conn: &Connection) -> Result<TodayProgress, AppError> {
+    let now = now_secs();
+    let today_start = now - (now % 86400);
+    let word_reviews: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM study_events WHERE kind = 'word_review' AND created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let sentences: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM study_events WHERE kind = 'sentence_event' AND created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let dictations: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM dictation_attempts WHERE created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let speaking: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM speaking_attempts WHERE created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let conversation_turns: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM conversation_messages WHERE role = 'assistant' AND created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let duration_ms: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(duration_ms), 0) FROM (
+             SELECT duration_ms FROM study_events
+             WHERE kind IN ('word_review', 'sentence_event') AND created_at >= ?1
+             UNION ALL
+             SELECT duration_ms FROM dictation_attempts WHERE created_at >= ?1
+             UNION ALL
+             SELECT duration_ms FROM speaking_attempts WHERE created_at >= ?1
+         )",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let due_words: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM word_states WHERE due_at <= ?1",
+        [now],
+        |row| row.get(0),
+    )?;
+    let plan = get_study_plan(conn)?;
+
+    let plan_percent = if plan.enabled {
+        let mut target_total = 0i64;
+        let mut filled_total = 0i64;
+        let mut push = |target: i64, actual: i64| {
+            if target > 0 {
+                target_total += target;
+                filled_total += actual.min(target);
+            }
+        };
+        push(plan.word_target, word_reviews);
+        push(plan.sentence_target, sentences);
+        push(plan.listening_target, dictations);
+        push(plan.speaking_target, speaking);
+        push(plan.conversation_target, conversation_turns);
+        push(plan.duration_min_target, duration_ms / 60000);
+        if target_total > 0 {
+            (filled_total * 100 / target_total).min(100)
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let streak_days = compute_streak_days(conn, today_start);
+
+    Ok(TodayProgress {
+        word_reviews,
+        sentences,
+        dictations,
+        speaking,
+        conversation_turns,
+        duration_min: duration_ms / 60000,
+        due_words,
+        streak_days,
+        plan_percent,
+        plan,
+    })
+}
+
+/// 从今天往回数，统计连续有学习活动的天数（单词/句子/听写/朗读/对话任一即可）。
+fn compute_streak_days(conn: &Connection, today_start: i64) -> i64 {
+    let mut streak = 0i64;
+    for day_offset in 0..365i64 {
+        let day_start = today_start - day_offset * 86400;
+        let day_end = day_start + 86400;
+        let has_activity: i64 = conn
+            .query_row(
+                "SELECT
+                     (SELECT COUNT(*) FROM study_events WHERE created_at >= ?1 AND created_at < ?2)
+                   + (SELECT COUNT(*) FROM dictation_attempts WHERE created_at >= ?1 AND created_at < ?2)
+                   + (SELECT COUNT(*) FROM speaking_attempts WHERE created_at >= ?1 AND created_at < ?2)
+                   + (SELECT COUNT(*) FROM conversation_messages WHERE role = 'assistant' AND created_at >= ?1 AND created_at < ?2)",
+                params![day_start, day_end],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if has_activity > 0 {
+            streak += 1;
+        } else {
+            break;
+        }
+    }
+    streak
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2401,6 +2914,202 @@ mod tests {
         assert!(result.is_err());
     }
 
+    #[test]
+    fn study_plan_and_reminder_roundtrip() {
+        let conn = test_conn();
+        let plan = get_study_plan(&conn).unwrap();
+        assert!(plan.enabled);
+        assert_eq!(plan.word_target, 10);
+        assert_eq!(plan.duration_min_target, 18);
+
+        let mut updated = plan.clone();
+        updated.word_target = 20;
+        updated.duration_min_target = 30;
+        save_study_plan(&conn, &updated).unwrap();
+        let loaded = get_study_plan(&conn).unwrap();
+        assert_eq!(loaded.word_target, 20);
+        assert_eq!(loaded.duration_min_target, 30);
+
+        let reminder = ReminderSettings {
+            enabled: false,
+            hour: 21,
+            minute: 30,
+        };
+        save_reminder_settings(&conn, &reminder).unwrap();
+        let loaded_reminder = get_reminder_settings(&conn).unwrap();
+        assert!(!loaded_reminder.enabled);
+        assert_eq!(loaded_reminder.hour, 21);
+        assert_eq!(loaded_reminder.minute, 30);
+    }
+
+    #[test]
+    fn weekly_stats_aggregate_across_modules() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let before = get_weekly_stats(&conn, Some(7)).unwrap();
+        assert_eq!(before.len(), 7);
+        assert!(before.iter().all(|day| day.reviews == 0 && day.dictations == 0));
+
+        let now = now_secs();
+        let today_start = now - (now % 86400);
+        conn.execute(
+            "INSERT INTO study_events (kind, ref_id, result, rating, duration_ms, created_at)
+             VALUES ('word_review', 1, 1, 3, 50000, ?1),
+                    ('word_review', 2, 0, 1, 30000, ?1),
+                    ('sentence_event', 1, 1, NULL, 20000, ?1)",
+            params![today_start],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO dictation_attempts
+                 (clip_id, segment_id, expected, submitted, correct, duration_ms, created_at)
+             VALUES (1, 1, 'hello', 'hello', 1, 40000, ?1)",
+            params![today_start],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO speaking_attempts
+                 (clip_id, segment_id, expected, transcribed, word_matches, word_total,
+                  accuracy_percent, confidence, low_confidence, duration_ms, created_at)
+             VALUES (1, 1, 'hello', 'hello', 1, 1, 100, 0.9, 0, 30000, ?1)",
+            params![today_start],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO conversation_sessions (scene_id, started_at, created_at) VALUES (1, ?1, ?1)",
+            params![today_start],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO conversation_messages (session_id, role, content, created_at)
+             VALUES (1, 'assistant', 'Hi!', ?1)",
+            params![today_start],
+        )
+        .unwrap();
+
+        let stats = get_weekly_stats(&conn, Some(7)).unwrap();
+        let today = stats.last().unwrap();
+        assert_eq!(today.reviews, 3);
+        assert_eq!(today.dictations, 1);
+        assert_eq!(today.speaking, 1);
+        assert_eq!(today.conversation_turns, 1);
+        assert_eq!(today.accuracy_percent, 66);
+        assert_eq!(today.duration_min, (50000 + 30000 + 20000 + 40000 + 30000) / 60000);
+        // Older days remain untouched.
+        assert_eq!(stats[0].reviews, 0);
+    }
+
+    #[test]
+    fn mastery_progress_reflects_states() {
+        let mut conn = test_conn();
+        answer_word(&mut conn, 1, 3, 5000).unwrap();
+        complete_sentence(&mut conn, 1, true, 2000).unwrap();
+        add_to_vocabulary(&conn, 2).unwrap();
+        let progress = get_mastery_progress(&conn).unwrap();
+        assert_eq!(progress.learned_words, 1);
+        assert_eq!(progress.vocabulary_count, 1);
+        assert_eq!(progress.mastery_percent, 5);
+        let learning = progress
+            .word_stages
+            .iter()
+            .find(|item| item.stage == "learning")
+            .expect("learning stage should exist");
+        assert_eq!(learning.count, 1);
+        let new = progress
+            .word_stages
+            .iter()
+            .find(|item| item.stage == "new")
+            .expect("new stage should exist");
+        assert_eq!(new.count, 19);
+        assert!(progress
+            .sentence_statuses
+            .iter()
+            .any(|item| item.stage == "learning"));
+    }
+
+    #[test]
+    fn mistake_book_aggregates_weaknesses() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        answer_word(&mut conn, 1, 1, 3000).unwrap();
+        answer_word(&mut conn, 1, 1, 3000).unwrap();
+        answer_word(&mut conn, 2, 3, 3000).unwrap();
+        record_dictation(&mut conn, 1, 1, "wrong".to_string(), 2000).unwrap();
+        record_speaking_attempt(
+            &mut conn,
+            1,
+            1,
+            "it depends how you look at this".to_string(),
+            0.3,
+            true,
+            3000,
+        )
+        .unwrap();
+        let now = now_secs();
+        conn.execute(
+            "INSERT INTO conversation_sessions (scene_id, started_at, turn_count, created_at)
+             VALUES (1, ?1, 2, ?1)",
+            params![now],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO conversation_messages (session_id, role, content, correction, created_at)
+             VALUES (1, 'user', 'I am very exciting about it.',
+                     '{\"original\":\"I am very exciting about it.\",\"suggestion\":\"I am very excited about it.\",\"note\":\"excited 用于描述感受\"}', ?1)",
+            params![now],
+        )
+        .unwrap();
+
+        let book = get_mistake_book(&conn).unwrap();
+        assert!(book
+            .low_score_words
+            .iter()
+            .any(|word| word.word_id == 1 && word.wrong_count == 2 && word.total_count == 2));
+        assert_eq!(book.weak_dictation.len(), 1);
+        assert_eq!(book.weak_speaking.len(), 1);
+        assert_eq!(book.conversation_corrections.len(), 1);
+        assert_eq!(book.conversation_corrections[0].suggestion, "I am very excited about it.");
+        assert_eq!(book.conversation_corrections[0].scene_title, "咖啡馆点单");
+    }
+
+    #[test]
+    fn today_progress_ties_plan_to_events() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let before = get_today_progress(&conn).unwrap();
+        assert_eq!(before.word_reviews, 0);
+        assert_eq!(before.due_words, 20);
+        assert!(before.plan.enabled);
+        assert_eq!(before.plan_percent, 0);
+
+        let now = now_secs();
+        let today_start = now - (now % 86400);
+        for i in 0..10 {
+            conn.execute(
+                "INSERT INTO study_events (kind, ref_id, result, rating, duration_ms, created_at)
+                 VALUES ('word_review', 1, 1, 3, 60000, ?1)",
+                params![today_start + i],
+            )
+            .unwrap();
+        }
+        conn.execute(
+            "INSERT INTO dictation_attempts
+                 (clip_id, segment_id, expected, submitted, correct, duration_ms, created_at)
+             VALUES (1, 1, 'hello', 'hello', 1, 300000, ?1)",
+            params![today_start],
+        )
+        .unwrap();
+
+        let after = get_today_progress(&conn).unwrap();
+        assert_eq!(after.word_reviews, 10);
+        assert_eq!(after.dictations, 1);
+        assert_eq!(after.duration_min, 15);
+        assert_eq!(after.streak_days, 1);
+        // 单词 10/10、句子 0/5、听力 1/3、朗读 0/3、对话 0/4、时长 15/18
+        // 完成量 = 10+0+1+0+0+15 = 26，目标总量 = 10+5+3+3+4+18 = 43
+        // => 26 * 100 / 43 = 60（向下取整）。
+        assert_eq!(after.plan_percent, 60);
+    }
 }
 #[test]
 fn file_backed_database_persists_across_reopen() {
@@ -2450,3 +3159,6 @@ fn export_and_clear_learning_data() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+
+

@@ -265,6 +265,88 @@ export interface LlmTestResult {
   message: string;
 }
 
+
+/* ============================================================
+ * M6 · 数据、复习与计划
+ * ============================================================ */
+
+export interface DailyStat {
+  day_start: number;
+  reviews: number;
+  dictations: number;
+  speaking: number;
+  conversation_turns: number;
+  duration_min: number;
+  accuracy_percent: number;
+}
+
+export interface StageCount {
+  stage: string;
+  count: number;
+}
+
+export interface MasteryProgress {
+  word_stages: StageCount[];
+  sentence_statuses: StageCount[];
+  learned_words: number;
+  mastered_words: number;
+  vocabulary_count: number;
+  mastery_percent: number;
+}
+
+export interface CorrectionEntry {
+  session_id: number;
+  scene_title: string;
+  original: string;
+  suggestion: string;
+  note: string;
+  created_at: number;
+}
+
+export interface WeakWord {
+  word_id: number;
+  word: string;
+  meaning: string;
+  wrong_count: number;
+  total_count: number;
+}
+
+export interface MistakeBook {
+  weak_dictation: WeakClip[];
+  weak_speaking: SpeakingWeakSegment[];
+  conversation_corrections: CorrectionEntry[];
+  low_score_words: WeakWord[];
+}
+
+export interface StudyPlan {
+  enabled: boolean;
+  word_target: number;
+  sentence_target: number;
+  listening_target: number;
+  speaking_target: number;
+  conversation_target: number;
+  duration_min_target: number;
+}
+
+export interface ReminderSettings {
+  enabled: boolean;
+  hour: number;
+  minute: number;
+}
+
+export interface TodayProgress {
+  word_reviews: number;
+  sentences: number;
+  dictations: number;
+  speaking: number;
+  conversation_turns: number;
+  duration_min: number;
+  due_words: number;
+  streak_days: number;
+  plan_percent: number;
+  plan: StudyPlan;
+}
+
 export const emptyConversationSettings: ConversationSettings = {
   base_url: "https://api.openai.com/v1",
   api_key: "",
@@ -299,6 +381,52 @@ export const emptyStats: StudyStats = {
   due_words: 0,
   mastered_words: 0,
   vocabulary_count: 0,
+};
+
+
+export const emptyStudyPlan: StudyPlan = {
+  enabled: true,
+  word_target: 10,
+  sentence_target: 5,
+  listening_target: 3,
+  speaking_target: 3,
+  conversation_target: 4,
+  duration_min_target: 18,
+};
+
+export const emptyReminderSettings: ReminderSettings = {
+  enabled: true,
+  hour: 20,
+  minute: 0,
+};
+
+export const emptyTodayProgress: TodayProgress = {
+  word_reviews: 0,
+  sentences: 0,
+  dictations: 0,
+  speaking: 0,
+  conversation_turns: 0,
+  duration_min: 0,
+  due_words: 0,
+  streak_days: 0,
+  plan_percent: 0,
+  plan: emptyStudyPlan,
+};
+
+export const emptyMasteryProgress: MasteryProgress = {
+  word_stages: [],
+  sentence_statuses: [],
+  learned_words: 0,
+  mastered_words: 0,
+  vocabulary_count: 0,
+  mastery_percent: 0,
+};
+
+export const emptyMistakeBook: MistakeBook = {
+  weak_dictation: [],
+  weak_speaking: [],
+  conversation_corrections: [],
+  low_score_words: [],
 };
 
 /** 把后端返回的任意错误统一转成用户可理解的中文信息。 */
@@ -367,5 +495,14 @@ export const api = {
   analyzeConversationCorrection: (sessionId: number, messageId: number) =>
     invokeCommand<Correction | null>("analyze_conversation_correction", { sessionId, messageId }),
   transcribeSpeech: (wav: number[]) => invokeCommand<Transcript>("transcribe_speech", { wav }),
+  getTodayProgress: () => invokeCommand<TodayProgress>("get_today_progress"),
+  getWeeklyStats: (days?: number) => invokeCommand<DailyStat[]>("get_weekly_stats", { days }),
+  getMasteryProgress: () => invokeCommand<MasteryProgress>("get_mastery_progress"),
+  getMistakeBook: () => invokeCommand<MistakeBook>("get_mistake_book"),
+  getStudyPlan: () => invokeCommand<StudyPlan>("get_study_plan"),
+  saveStudyPlan: (plan: StudyPlan) => invokeCommand<void>("save_study_plan", { plan }),
+  getReminderSettings: () => invokeCommand<ReminderSettings>("get_reminder_settings"),
+  saveReminderSettings: (settings: ReminderSettings) =>
+    invokeCommand<void>("save_reminder_settings", { settings }),
 };
 

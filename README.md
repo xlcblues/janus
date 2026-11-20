@@ -6,7 +6,7 @@ Janus 是太阳系软件系列中的 Windows 桌面端语言学习应用。初�
 
 ## 当前阶段
 
-**M5：AI 对话模块已完成。**
+**M6：数据、复习与计划模块已完成。**
 
 M1 已实现并验收：极简 Logo「双面之门（Janus Gate）」、Janus Iris + Trial Brass 主题 Token、Tauri 2 + React 19 + TypeScript + Vite 8 Windows 桌面壳、自定义标题栏与窗口交互、模块导航（`Ctrl+1` 至 `Ctrl+6`）与 `Ctrl+K` 搜索、1360×820 / 1040×700 响应式验收。
 
@@ -53,6 +53,17 @@ M5 新增并验收：
 - 语音输入：复用 M4 离线 Whisper 转写，录音仅内存、转写进入输入框，可纯文字输入降级；
 - 未配置降级：未填写服务配置时展示设置引导，测试连接可即时验证；
 - 回归：Rust 31 项单元/集成测试 + 前端 11 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test`、`cargo check` 通过。
+
+M6 新增并验收：
+
+- 周趋势：最近 7 天按日聚合复习/听写/朗读/对话事件与学习时长（分钟），Dashboard 与「学习数据」页双图表；
+- 掌握度：单词阶段分布（new → learning → reviewing → mastered）与整体掌握度环形图；
+- 错题本：聚合「反复记错 ≥ 2 次」的单词、听写/朗读低分片段与对话表达纠错，仅收录可追溯证据；
+- 今日进度：单词/句子/听力/朗读/对话完成量与连续学习天数，联动学习计划计算完成度；
+- 学习计划：每日配额（单词/句子/听力/朗读/对话/时长）可在「设置」页调整，Dashboard 今日路线同步展示；
+- 复习提醒：每日提醒时间偏好（启用/小时/分钟）仅存本地，桌面通知将在后续里程碑接入；
+- 数据边界：所有设置与进度仅存本地 SQLite（迁移 v5 新增 app_settings 表），不向任何服务器上传；
+- 回归：Rust 36 项单元/集成测试 + 前端 11 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 
 ## 快速开始
 
@@ -114,15 +125,15 @@ Janus/
   design/              # 设计规范、Token 与高保真预览
   docs/                # 开发流程、功能与技术方案
   src/                 # React UI、组件、页面与样式
-    lib/api.ts         # typed IPC 与统一错误模型（M2–M5）
+    lib/api.ts         # typed IPC 与统一错误模型（M2–M6）
     lib/recorder.ts    # 麦克风录音：16kHz mono PCM16 WAV，仅内存（M4）
-    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics 学习页（M2–M5）
-    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M5）
+    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M6）
+    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M6）
   scripts/             # download-whisper-model.ps1 离线 ASR 模型下载（M4）
   src-tauri/           # Tauri/Rust 壳层、窗口命令与权限
     src/asr.rs         # 离线 whisper ASR 转写（M4）
     src/llm.rs         # OpenAI 兼容 AI 网关：超时/重试/中文错误映射（M5）
-    src/db.rs          # SQLite 迁移、SRS、听力/听写/朗读/对话、事件、导出与备份（M2–M5）
+    src/db.rs          # SQLite 迁移、SRS、听力/听写/朗读/对话、事件、计划/提醒与备份（M2–M6）
   dist/                # Vite 生产构建，可重新生成
 ```
 
@@ -141,14 +152,14 @@ Janus/
 ## 当前边界
 
 - 单词（SRS 复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
-- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M6+ 规划；
+- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M7+ 规划；
 - 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分或模拟 AI 数据；AI 密钥只存本地数据库，不进前端构建；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）。
 
-## 下一步：M6
+## 下一步：M7
 
-M6 聚焦数据、复习与计划：周趋势与掌握度、错题/生词本聚合、学习计划与提醒、会话总结与复习入口；并推进 AI 对话的流式链路（流式 ASR/LLM、TTS 与打断）。
+M7 聚焦 AI 对话的实时链路与提醒：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、桌面复习通知、真实音频导入与云同步接口。
 
 ## 设计边界
 

@@ -552,6 +552,57 @@ async fn transcribe_speech(
     })
 }
 
+
+/* ============================================================
+ * M6 · 数据、复习与计划 IPC
+ * ============================================================ */
+
+#[tauri::command]
+fn get_today_progress(state: tauri::State<'_, AppState>) -> Result<db::TodayProgress, String> {
+    with_db_read(state.inner(), db::get_today_progress)
+}
+
+#[tauri::command]
+fn get_weekly_stats(
+    state: tauri::State<'_, AppState>,
+    days: Option<i64>,
+) -> Result<Vec<db::DailyStat>, String> {
+    with_db_read(state.inner(), |conn| db::get_weekly_stats(conn, days))
+}
+
+#[tauri::command]
+fn get_mastery_progress(state: tauri::State<'_, AppState>) -> Result<db::MasteryProgress, String> {
+    with_db_read(state.inner(), db::get_mastery_progress)
+}
+
+#[tauri::command]
+fn get_mistake_book(state: tauri::State<'_, AppState>) -> Result<db::MistakeBook, String> {
+    with_db_read(state.inner(), db::get_mistake_book)
+}
+
+#[tauri::command]
+fn get_study_plan(state: tauri::State<'_, AppState>) -> Result<db::StudyPlan, String> {
+    with_db_read(state.inner(), db::get_study_plan)
+}
+
+#[tauri::command]
+fn save_study_plan(state: tauri::State<'_, AppState>, plan: db::StudyPlan) -> Result<(), String> {
+    with_db_write(state.inner(), |conn| db::save_study_plan(conn, &plan))
+}
+
+#[tauri::command]
+fn get_reminder_settings(state: tauri::State<'_, AppState>) -> Result<db::ReminderSettings, String> {
+    with_db_read(state.inner(), db::get_reminder_settings)
+}
+
+#[tauri::command]
+fn save_reminder_settings(
+    state: tauri::State<'_, AppState>,
+    settings: db::ReminderSettings,
+) -> Result<(), String> {
+    with_db_write(state.inner(), |conn| db::save_reminder_settings(conn, &settings))
+}
+
 fn app_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .setup(|app| {
@@ -621,7 +672,15 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             end_conversation,
             send_conversation_message,
             analyze_conversation_correction,
-            transcribe_speech
+            transcribe_speech,
+            get_today_progress,
+            get_weekly_stats,
+            get_mastery_progress,
+            get_mistake_book,
+            get_study_plan,
+            save_study_plan,
+            get_reminder_settings,
+            save_reminder_settings
         ])
 }
 

@@ -311,7 +311,7 @@
 .mini-progress {
   position: absolute;
   right: 16px;
-  bottom: 16px;
+  bottom: 6px;
   left: 16px;
   height: 4px;
   overflow: hidden;
@@ -465,4 +465,21 @@
   .dashboard-lower {
     min-height: 260px;
   }
+}
+
+/* ---- M6 空复习态 ---- */
+
+.review-empty {
+  display: grid;
+  min-height: 120px;
+  padding: 20px 16px;
+  place-items: center;
+}
+
+.review-empty p {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
 }

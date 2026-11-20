@@ -7,6 +7,7 @@ import { Dashboard } from "./pages/Dashboard";
 import { ModulePage } from "./pages/ModulePage";
 import { WordsPage } from "./pages/WordsPage";
 import { SentencesPage } from "./pages/SentencesPage";
+import { ListeningPage } from "./pages/ListeningPage";
 import { NotebookPage } from "./pages/NotebookPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { navItems } from "./data/navigation";
@@ -110,6 +111,8 @@ export default function App() {
             <WordsPage onNavigate={navigate} onNotify={setToast} />
           ) : activeId === "sentences" ? (
             <SentencesPage onNotify={setToast} />
+          ) : activeId === "listening" ? (
+            <ListeningPage onNavigate={navigate} onNotify={setToast} />
           ) : activeId === "notebook" ? (
             <NotebookPage onNotify={setToast} />
           ) : activeId === "analytics" ? (

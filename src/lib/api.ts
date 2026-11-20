@@ -64,6 +64,78 @@ export interface ClearResult {
   backup_path: string;
 }
 
+
+export interface ListeningClip {
+  id: number;
+  title: string;
+  lang: string;
+  source: string;
+  file_name: string;
+  duration_ms: number;
+  segment_count: number;
+  created_at: number;
+}
+
+export interface ListeningSegment {
+  id: number;
+  clip_id: number;
+  seq: number;
+  text_en: string;
+  text_zh: string;
+  start_ms: number;
+  end_ms: number;
+}
+
+export interface ListeningDetail {
+  clip: ListeningClip;
+  segments: ListeningSegment[];
+}
+
+export interface AudioCatalogEntry {
+  id: number;
+  title: string;
+  text_zh: string;
+  source: string;
+  file_name: string;
+  file_path: string;
+  duration_ms: number;
+  segment_count: number;
+  dictation_attempts: number;
+  dictation_correct: number;
+}
+
+export interface DictationResult {
+  id: number;
+  clip_id: number;
+  segment_id: number;
+  expected: string;
+  submitted: string;
+  correct: boolean;
+  duration_ms: number;
+  created_at: number;
+}
+
+export interface WeakClip {
+  clip_id: number;
+  title: string;
+  attempts: number;
+  correct: number;
+  accuracy_percent: number;
+}
+
+export interface DictationStats {
+  total_attempts: number;
+  correct_attempts: number;
+  accuracy_percent: number;
+  today_attempts: number;
+  today_correct: number;
+  weakest_clips: WeakClip[];
+}
+
+export interface DeleteResult {
+  file_name: string;
+}
+
 export const emptyOverview: Overview = {
   total_words: 0,
   due_words: 0,
@@ -117,4 +189,11 @@ export const api = {
   getStats: () => invokeCommand<StudyStats>("get_stats"),
   exportData: () => invokeCommand<ExportResult>("export_data"),
   clearLearningData: () => invokeCommand<ClearResult>("clear_learning_data"),
+  getAudioCatalog: () => invokeCommand<AudioCatalogEntry[]>("get_audio_catalog"),
+  getListeningDetail: (clipId: number) =>
+    invokeCommand<ListeningDetail>("get_listening_detail", { clipId }),
+  recordDictation: (clipId: number, segmentId: number, submitted: string, durationMs: number) =>
+    invokeCommand<DictationResult>("record_dictation", { clipId, segmentId, submitted, durationMs }),
+  getDictationStats: () => invokeCommand<DictationStats>("get_dictation_stats"),
+  deleteSeedAudio: (clipId: number) => invokeCommand<DeleteResult>("delete_seed_audio", { clipId }),
 };

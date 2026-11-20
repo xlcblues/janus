@@ -572,3 +572,609 @@
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* ============================================================
+ * M3 · 听力与媒体模块
+ * 播放器 / 句段定位 / 变速 / 听写判断 / 片段库
+ * ============================================================ */
+
+.listening-page {
+  gap: 20px;
+}
+
+.listening-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 300px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.spin {
+  animation: janus-spin 0.9s linear infinite;
+}
+
+@keyframes janus-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.listening-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 260px;
+  padding: 32px;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  text-align: center;
+}
+
+.listening-empty > svg {
+  color: var(--accent);
+}
+
+.listening-empty p {
+  max-width: 380px;
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* ---- 播放器 ---- */
+
+.listening-player {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-1);
+}
+
+.player-toolbar {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.player-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.player-title h2 {
+  margin: 2px 0 0;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+}
+
+.player-subtitle-zh {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.player-toolbar .button-danger {
+  flex-shrink: 0;
+}
+
+/* ---- 播放控制 ---- */
+
+.player-transport {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--bg-subtle);
+}
+
+.transport-buttons {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.transport-play {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  box-shadow: var(--accent-shadow);
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-press) var(--ease-out);
+}
+
+.transport-play:hover {
+  background: var(--accent-ink);
+}
+
+.transport-play:active {
+  transform: scale(.96);
+}
+
+.transport-icon {
+  width: var(--icon-button);
+  padding: 0;
+}
+
+.seek-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.seek-row input[type="range"] {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.seek-time {
+  color: var(--text-3);
+  font: 500 11px/16px var(--font-mono);
+  white-space: nowrap;
+}
+
+.transport-options {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.speed-group {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+}
+
+.speed-button {
+  min-width: 44px;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-2);
+  font: 600 11px/16px var(--font-mono);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.speed-button:hover {
+  color: var(--text);
+}
+
+.speed-button.active {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.option-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.option-button:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.option-button.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* ---- 字幕 ---- */
+
+.subtitle-strip {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-subtle);
+}
+
+.subtitle-en {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.subtitle-zh {
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* ---- 句段定位 ---- */
+
+.segment-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.segment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 7px 12px 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.segment-chip:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.segment-chip.active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.segment-seq {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--fill);
+  color: var(--text-3);
+  font: 600 10px/14px var(--font-mono);
+}
+
+.segment-chip.active .segment-seq {
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+/* ---- 听写 ---- */
+
+.dictation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-card);
+  background: var(--accent-soft);
+}
+
+.dictation-head h3 {
+  margin: 2px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.dictation-head p:last-child {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 11px;
+  line-height: 18px;
+}
+
+.dictation-row {
+  display: flex;
+  gap: 10px;
+}
+
+.dictation-row input {
+  flex: 1;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-control);
+  background: var(--bg-raised);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.dictation-row input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.dictation-result {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--bg-raised);
+}
+
+.dictation-result > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.dictation-result p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.dictation-result.correct {
+  border-color: var(--success);
+  background: var(--success-soft);
+}
+
+.dictation-result.correct > svg {
+  color: var(--success);
+}
+
+.dictation-result.wrong {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.dictation-result.wrong > svg {
+  color: var(--danger);
+}
+
+.dictation-expected {
+  margin-top: 4px !important;
+  color: var(--danger);
+  font: 500 11px/16px var(--font-mono);
+}
+
+/* ---- 听写统计 ---- */
+
+.listening-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.listening-stats .stat-card {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+}
+
+.listening-stats .stat-card > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.listening-stats .stat-card div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.listening-stats .stat-card b {
+  font-size: 20px;
+  line-height: 26px;
+}
+
+/* ---- 薄弱片段 ---- */
+
+.weak-clips {
+  padding: 14px 16px;
+  border: 1px solid var(--gold);
+  border-radius: var(--radius-card);
+  background: var(--gold-soft);
+}
+
+.weak-clips ul {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 20px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.weak-clips li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.weak-title {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.weak-accuracy {
+  flex-shrink: 0;
+  color: var(--gold-ink);
+  font: 500 11px/16px var(--font-mono);
+}
+
+/* ---- 片段库 ---- */
+
+.catalog-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.catalog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.catalog-note {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+}
+
+.catalog-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-raised);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+
+.catalog-item:hover {
+  border-color: var(--line-strong);
+}
+
+.catalog-item.active {
+  border-color: var(--accent-border);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.catalog-play {
+  display: grid;
+  flex-shrink: 0;
+  width: var(--icon-button);
+  height: var(--icon-button);
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--accent-ink);
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+
+.catalog-play:hover {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.catalog-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.catalog-copy h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.catalog-copy p {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalog-meta {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+.catalog-duration,
+.catalog-accuracy {
+  color: var(--text-3);
+  font: 500 11px/16px var(--font-mono);
+  white-space: nowrap;
+}
+
+.catalog-delete {
+  display: grid;
+  width: var(--icon-button);
+  height: var(--icon-button);
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: transparent;
+  color: var(--text-3);
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+
+.catalog-delete:hover {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (max-width: 1080px) {
+  .player-transport {
+    grid-template-columns: 1fr;
+  }
+
+  .transport-options {
+    flex-wrap: wrap;
+  }
+
+  .weak-clips ul {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .listening-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .player-toolbar {
+    flex-direction: column;
+  }
+}

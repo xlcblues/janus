@@ -1,4 +1,5 @@
 mod db;
+mod seed_audio;
 
 use rusqlite::Connection;
 use std::path::PathBuf;
@@ -10,6 +11,7 @@ use tauri::{Manager, WebviewWindow};
 struct AppState {
     db: Mutex<Connection>,
     data_dir: PathBuf,
+    media_dir: PathBuf,
 }
 
 fn desktop_error(error: tauri::Error) -> String {
@@ -148,15 +150,75 @@ fn clear_learning_data(state: tauri::State<'_, AppState>) -> Result<db::ClearRes
     })
 }
 
+
+#[tauri::command]
+fn get_audio_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<db::AudioCatalogEntry>, String> {
+    let media_dir = state.inner().media_dir.clone();
+    with_db_read(state.inner(), |conn| db::get_audio_catalog(conn, &media_dir))
+}
+
+#[tauri::command]
+fn get_listening_detail(
+    state: tauri::State<'_, AppState>,
+    clip_id: i64,
+) -> Result<db::ListeningDetail, String> {
+    with_db_read(state.inner(), |conn| db::get_listening_detail(conn, clip_id))
+}
+
+#[tauri::command]
+fn record_dictation(
+    state: tauri::State<'_, AppState>,
+    clip_id: i64,
+    segment_id: i64,
+    submitted: String,
+    duration_ms: i64,
+) -> Result<db::DictationResult, String> {
+    with_db_write(state.inner(), |conn| {
+        db::record_dictation(conn, clip_id, segment_id, submitted, duration_ms)
+    })
+}
+
+#[tauri::command]
+fn get_dictation_stats(
+    state: tauri::State<'_, AppState>,
+) -> Result<db::DictationStats, String> {
+    with_db_read(state.inner(), db::get_dictation_stats)
+}
+
+#[tauri::command]
+fn delete_seed_audio(
+    state: tauri::State<'_, AppState>,
+    clip_id: i64,
+) -> Result<db::DeleteResult, String> {
+    let result = with_db_write(state.inner(), |conn| db::delete_seed_audio(conn, clip_id))?;
+    let target = state.inner().media_dir.join(&result.file_name);
+    if target.exists() {
+        std::fs::remove_file(&target).map_err(|error| error.to_string())?;
+    }
+    Ok(result)
+}
+
 fn app_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            let conn = db::open(&data_dir.join("janus.db"))?;
+            let media_dir = data_dir.join("media_cache");
+            std::fs::create_dir_all(&media_dir)?;
+            let mut conn = db::open(&data_dir.join("janus.db"))?;
+            for (index, clip) in seed_audio::SEED_CLIPS.iter().enumerate() {
+                let target = media_dir.join(format!("seed-{:02}.wav", index + 1));
+                if !target.exists() {
+                    std::fs::write(&target, clip.wav)?;
+                }
+            }
+            db::ensure_seed_listening_clips(&mut conn)?;
             app.manage(AppState {
                 db: Mutex::new(conn),
                 data_dir,
+                media_dir,
             });
             Ok(())
         })
@@ -176,7 +238,12 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             remove_from_vocabulary,
             get_stats,
             export_data,
-            clear_learning_data
+            clear_learning_data,
+            get_audio_catalog,
+            get_listening_detail,
+            record_dictation,
+            get_dictation_stats,
+            delete_seed_audio
         ])
 }
 

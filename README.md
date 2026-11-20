@@ -6,7 +6,7 @@ Janus 是太阳系软件系列中的 Windows 桌面端语言学习应用。初�
 
 ## 当前阶段
 
-**M2：最小本地学习闭环已完成。**
+**M3：听力与媒体模块已完成。**
 
 M1 已实现并验收：极简 Logo「双面之门（Janus Gate）」、Janus Iris + Trial Brass 主题 Token、Tauri 2 + React 19 + TypeScript + Vite 8 Windows 桌面壳、自定义标题栏与窗口交互、模块导航（`Ctrl+1` 至 `Ctrl+6`）与 `Ctrl+K` 搜索、1360×820 / 1040×700 响应式验收。
 
@@ -22,6 +22,17 @@ M2 新增并验收：
 - 浏览器预览降级：不伪造数据，明确提示数据仅在桌面应用可用；
 - 回归：Rust 7 项单元/集成测试 + 前端 7 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo check` 通过；
 - 重启后状态保留：文件级数据库重开测试验证单词状态与生词本持久化。
+
+M3 新增并验收：
+
+- 20 条真实英文语音片段（Windows 离线 TTS 生成，16kHz/16bit/mono，约 1.65MB）内嵌于安装包并在首次启动写入本地媒体缓存；
+- 听力播放器：播放/暂停、进度定位、0.75× / 1.0× / 1.25× 变速、单句循环、字幕开关与双语字幕条；
+- 逐句定位：20 条片段按句切分并记录 `start_ms` / `end_ms`，句段可点击跳转；
+- 听写判断：后端（Rust/SQLite）规范化文本并判分，前端不自行评分；记录时长、正误与原文回显；
+- 听写统计：累计听写、今日正确、总正确率与薄弱片段 Top5；
+- 片段删除：删除音频文件与听写记录，并写入墓碑表防止重启后种子片段复活；
+- asset 协议：通过 Tauri `assetProtocol` 安全提供本地媒体文件，不暴露绝对路径给前端组件；
+- 回归：Rust 12 项单元/集成测试 + 前端 8 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 
 ## 快速开始
 
@@ -82,11 +93,11 @@ Janus/
   design/              # 设计规范、Token 与高保真预览
   docs/                # 开发流程、功能与技术方案
   src/                 # React UI、组件、页面与样式
-    lib/api.ts         # typed IPC 与统一错误模型（M2）
-    pages/             # Words/Sentences/Notebook/Analytics 学习闭环页（M2）
+    lib/api.ts         # typed IPC 与统一错误模型（M2/M3）
+    pages/             # Words/Sentences/Listening/Notebook/Analytics 学习页（M2/M3）
     styles/learning.css# 学习闭环样式（仅语义 Token）
   src-tauri/           # Tauri/Rust 壳层、窗口命令与权限
-    src/db.rs          # SQLite 迁移、SRS、事件、导出与备份（M2）
+    src/db.rs          # SQLite 迁移、SRS、听力/听写、事件、导出与备份（M2/M3）
   dist/                # Vite 生产构建，可重新生成
 ```
 
@@ -104,14 +115,15 @@ Janus/
 
 ## 当前边界
 
-- 单词（SRS 复习队列、评分、生词本）与句子（主动回忆、对/错事件）已形成本地学习闭环；
-- 听力、朗读、AI 对话尚未接入：无真实音频、录音、ASR、TTS、发音评分与云端服务；
+- 单词（SRS 复习队列、评分、生词本）、句子（主动回忆、对/错事件）与听力（播放/变速/逐句循环/听写）已形成本地学习闭环；
+- 朗读与 AI 对话尚未接入：无录音、ASR、TTS、发音评分与云端服务；
+- 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分、模拟 AI 对话或任何密钥配置；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）。
 
-## 下一步：M3
+## 下一步：M4
 
-M3 聚焦听力与媒体：音频导入/索引、播放/暂停/变速/逐句循环、字幕同步、听写判断与错题记录、媒体缓存与删除策略。
+M4 聚焦朗读与口语：麦克风权限流程、VAD、录音回放、流式/分段 ASR 与基础发音反馈。
 
 ## 设计边界
 
@@ -122,4 +134,4 @@ M3 聚焦听力与媒体：音频导入/索引、播放/暂停/变速/逐句循�
 
 ## 验证状态
 
-截至 2026-11-20，`pnpm typecheck`、`pnpm test`、`pnpm build` 与 `cargo check --manifest-path src-tauri/Cargo.toml` 均通过。
+截至 2026-11-20，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 12 项 + 前端 8 项）。

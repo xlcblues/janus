@@ -3,8 +3,9 @@ use serde::Serialize;
 use std::fmt;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use crate::seed_audio::{wav_duration_ms, SEED_CLIPS};
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS words (
@@ -117,6 +118,49 @@ SELECT id, 'new', 0, 2.5, 0, 0, CAST(strftime('%s', 'now') AS INTEGER), CAST(str
 INSERT OR IGNORE INTO sentence_states (sentence_id, status, attempts, correct_count, last_result, last_attempted_at, created_at)
 SELECT id, 'new', 0, 0, NULL, NULL, CAST(strftime('%s', 'now') AS INTEGER) FROM sentences;
 "#;
+
+const MIGRATION_2: &str = r#"
+CREATE TABLE IF NOT EXISTS listening_clips (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    lang TEXT NOT NULL DEFAULT 'en',
+    source TEXT NOT NULL DEFAULT 'import',
+    file_name TEXT NOT NULL DEFAULT '',
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    segment_count INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS listening_segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL REFERENCES listening_clips(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL,
+    text_en TEXT NOT NULL,
+    text_zh TEXT NOT NULL DEFAULT '',
+    start_ms INTEGER NOT NULL,
+    end_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS dictation_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL REFERENCES listening_clips(id) ON DELETE CASCADE,
+    segment_id INTEGER NOT NULL REFERENCES listening_segments(id) ON DELETE CASCADE,
+    expected TEXT NOT NULL,
+    submitted TEXT NOT NULL,
+    correct INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS deleted_seed_clips (
+    seed_index INTEGER PRIMARY KEY,
+    deleted_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_listening_segments_clip ON listening_segments(clip_id, seq);
+CREATE INDEX IF NOT EXISTS idx_dictation_attempts_clip ON dictation_attempts(clip_id, created_at);
+"#;
+
 
 #[derive(Debug)]
 pub enum AppError {
@@ -256,6 +300,86 @@ pub struct ClearResult {
     pub backup_path: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ListeningClip {
+    pub id: i64,
+    pub title: String,
+    pub lang: String,
+    pub source: String,
+    pub file_name: String,
+    pub duration_ms: i64,
+    pub segment_count: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListeningSegment {
+    pub id: i64,
+    pub clip_id: i64,
+    pub seq: i64,
+    pub text_en: String,
+    pub text_zh: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ListeningDetail {
+    pub clip: ListeningClip,
+    pub segments: Vec<ListeningSegment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AudioCatalogEntry {
+    pub id: i64,
+    pub title: String,
+    pub text_zh: String,
+    pub source: String,
+    pub file_name: String,
+    pub file_path: String,
+    pub duration_ms: i64,
+    pub segment_count: i64,
+    pub dictation_attempts: i64,
+    pub dictation_correct: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DictationResult {
+    pub id: i64,
+    pub clip_id: i64,
+    pub segment_id: i64,
+    pub expected: String,
+    pub submitted: String,
+    pub correct: bool,
+    pub duration_ms: i64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WeakClip {
+    pub clip_id: i64,
+    pub title: String,
+    pub attempts: i64,
+    pub correct: i64,
+    pub accuracy_percent: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DictationStats {
+    pub total_attempts: i64,
+    pub correct_attempts: i64,
+    pub accuracy_percent: i64,
+    pub today_attempts: i64,
+    pub today_correct: i64,
+    pub weakest_clips: Vec<WeakClip>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteResult {
+    pub file_name: String,
+}
+
+
 #[derive(Debug, Clone)]
 struct SrsState {
     stage: String,
@@ -288,6 +412,12 @@ fn migrate(conn: &mut Connection) -> SqliteResult<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(MIGRATION_1)?;
         tx.execute_batch("PRAGMA user_version = 1;")?;
+        tx.commit()?;
+    }
+    if version < 2 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_2)?;
+        tx.execute_batch("PRAGMA user_version = 2;")?;
         tx.commit()?;
     }
     Ok(())
@@ -757,6 +887,7 @@ pub fn clear_learning_data(conn: &mut Connection, data_dir: &Path) -> Result<Cle
 
     let tx = conn.transaction()?;
     tx.execute("DELETE FROM study_events", [])?;
+    tx.execute("DELETE FROM dictation_attempts", [])?;
     tx.execute("DELETE FROM vocabulary", [])?;
     tx.execute("DELETE FROM word_states", [])?;
     tx.execute("DELETE FROM sentence_states", [])?;
@@ -776,6 +907,276 @@ pub fn clear_learning_data(conn: &mut Connection, data_dir: &Path) -> Result<Cle
     Ok(ClearResult {
         backup_path: backup_path.to_string_lossy().to_string(),
     })
+}
+
+
+fn normalize_dictation_text(input: &str) -> String {
+    input
+        .chars()
+        .map(|c| {
+            if c.is_whitespace() {
+                ' '
+            } else if c.is_alphanumeric() || c == '\'' || c == '-' {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Insert the 20 bundled seed clips (and their single segments) into the
+/// listening tables. Idempotent: uses stable ids 1..=20 and skips clips the
+/// user has deleted (tombstoned in deleted_seed_clips).
+pub fn ensure_seed_listening_clips(conn: &mut Connection) -> Result<(), AppError> {
+    let now = now_secs();
+    let tx = conn.transaction()?;
+    for (index, clip) in SEED_CLIPS.iter().enumerate() {
+        let seed_index = (index + 1) as i64;
+        let tombstoned: Option<i64> = tx
+            .query_row(
+                "SELECT 1 FROM deleted_seed_clips WHERE seed_index = ?1",
+                [seed_index],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if tombstoned.is_some() {
+            continue;
+        }
+        let file_name = format!("seed-{seed_index:02}.wav");
+        let duration_ms = wav_duration_ms(clip.wav);
+        tx.execute(
+            "INSERT OR IGNORE INTO listening_clips
+             (id, title, lang, source, file_name, duration_ms, segment_count, created_at)
+             VALUES (?1, ?2, 'en', 'seed', ?3, ?4, 1, ?5)",
+            params![seed_index, clip.title, file_name, duration_ms, now],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO listening_segments
+             (id, clip_id, seq, text_en, text_zh, start_ms, end_ms)
+             VALUES (?1, ?1, 1, ?2, ?3, 0, ?4)",
+            params![seed_index, clip.title, clip.text_zh, duration_ms],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn get_audio_catalog(
+    conn: &Connection,
+    media_dir: &Path,
+) -> Result<Vec<AudioCatalogEntry>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.title, c.source, c.file_name, c.duration_ms, c.segment_count,
+                COALESCE((SELECT seg.text_zh FROM listening_segments seg WHERE seg.clip_id = c.id LIMIT 1), ''),
+                (SELECT COUNT(*) FROM dictation_attempts d WHERE d.clip_id = c.id),
+                (SELECT COUNT(*) FROM dictation_attempts d WHERE d.clip_id = c.id AND d.correct = 1)
+         FROM listening_clips c
+         ORDER BY c.id ASC",
+    )?;
+    let entries = stmt
+        .query_map([], |row| {
+            let file_name: String = row.get(3)?;
+            let file_path = media_dir.join(&file_name);
+            Ok(AudioCatalogEntry {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                source: row.get(2)?,
+                file_name,
+                file_path: file_path.to_string_lossy().to_string(),
+                duration_ms: row.get(4)?,
+                segment_count: row.get(5)?,
+                text_zh: row.get(6)?,
+                dictation_attempts: row.get(7)?,
+                dictation_correct: row.get(8)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(entries)
+}
+
+pub fn get_listening_detail(conn: &Connection, clip_id: i64) -> Result<ListeningDetail, AppError> {
+    let clip = conn
+        .query_row(
+            "SELECT id, title, lang, source, file_name, duration_ms, segment_count, created_at
+             FROM listening_clips WHERE id = ?1",
+            [clip_id],
+            |row| {
+                Ok(ListeningClip {
+                    id: row.get(0)?,
+                    title: row.get(1)?,
+                    lang: row.get(2)?,
+                    source: row.get(3)?,
+                    file_name: row.get(4)?,
+                    duration_ms: row.get(5)?,
+                    segment_count: row.get(6)?,
+                    created_at: row.get(7)?,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::NotFound("没有找到这个听力片段。".to_string()))?;
+
+    let mut stmt = conn.prepare(
+        "SELECT id, clip_id, seq, text_en, text_zh, start_ms, end_ms
+         FROM listening_segments WHERE clip_id = ?1 ORDER BY seq ASC",
+    )?;
+    let segments = stmt
+        .query_map(params![clip_id], |row| {
+            Ok(ListeningSegment {
+                id: row.get(0)?,
+                clip_id: row.get(1)?,
+                seq: row.get(2)?,
+                text_en: row.get(3)?,
+                text_zh: row.get(4)?,
+                start_ms: row.get(5)?,
+                end_ms: row.get(6)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(ListeningDetail { clip, segments })
+}
+
+/// Record one dictation attempt. Correctness is judged by the backend against
+/// the stored segment text (the client never declares its own score).
+pub fn record_dictation(
+    conn: &mut Connection,
+    clip_id: i64,
+    segment_id: i64,
+    submitted: String,
+    duration_ms: i64,
+) -> Result<DictationResult, AppError> {
+    let expected = conn
+        .query_row(
+            "SELECT text_en FROM listening_segments WHERE id = ?1 AND clip_id = ?2",
+            params![segment_id, clip_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::NotFound("没有找到这个听写片段。".to_string()))?;
+    let correct = normalize_dictation_text(&submitted) == normalize_dictation_text(&expected);
+    let now = now_secs();
+    conn.execute(
+        "INSERT INTO dictation_attempts (clip_id, segment_id, expected, submitted, correct, duration_ms, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![clip_id, segment_id, expected, submitted, correct, duration_ms, now],
+    )?;
+    Ok(DictationResult {
+        id: conn.last_insert_rowid(),
+        clip_id,
+        segment_id,
+        expected,
+        submitted,
+        correct,
+        duration_ms,
+        created_at: now,
+    })
+}
+
+pub fn get_dictation_stats(conn: &Connection) -> Result<DictationStats, AppError> {
+    let now = now_secs();
+    let today_start = now - (now % 86400);
+    let total_attempts: i64 =
+        conn.query_row("SELECT COUNT(*) FROM dictation_attempts", [], |row| row.get(0))?;
+    let correct_attempts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM dictation_attempts WHERE correct = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    let today_attempts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM dictation_attempts WHERE created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+    let today_correct: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM dictation_attempts WHERE correct = 1 AND created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.title, COUNT(d.id) AS attempts, COALESCE(SUM(d.correct), 0) AS correct
+         FROM listening_clips c
+         LEFT JOIN dictation_attempts d ON d.clip_id = c.id
+         GROUP BY c.id
+         HAVING attempts > 0
+         ORDER BY (CAST(correct AS REAL) / attempts) ASC, attempts DESC
+         LIMIT 5",
+    )?;
+    let weakest_clips = stmt
+        .query_map([], |row| {
+            let attempts: i64 = row.get(2)?;
+            let correct: i64 = row.get(3)?;
+            Ok(WeakClip {
+                clip_id: row.get(0)?,
+                title: row.get(1)?,
+                attempts,
+                correct,
+                accuracy_percent: if attempts > 0 {
+                    correct * 100 / attempts
+                } else {
+                    0
+                },
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+
+    Ok(DictationStats {
+        total_attempts,
+        correct_attempts,
+        accuracy_percent: if total_attempts > 0 {
+            correct_attempts * 100 / total_attempts
+        } else {
+            0
+        },
+        today_attempts,
+        today_correct,
+        weakest_clips,
+    })
+}
+
+/// Delete a listening clip (cascades segments and dictation attempts). Seed
+/// clips are tombstoned so the next startup does not resurrect them.
+pub fn delete_seed_audio(conn: &mut Connection, clip_id: i64) -> Result<DeleteResult, AppError> {
+    let clip = conn
+        .query_row(
+            "SELECT source, file_name FROM listening_clips WHERE id = ?1",
+            [clip_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| AppError::NotFound("没有找到这个听力片段。".to_string()))?;
+    let (source, file_name) = clip;
+
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM listening_clips WHERE id = ?1", [clip_id])?;
+    if source == "seed" {
+        let seed_index = seed_index_from_file_name(&file_name);
+        if let Some(index) = seed_index {
+            tx.execute(
+                "INSERT OR IGNORE INTO deleted_seed_clips (seed_index, deleted_at) VALUES (?1, ?2)",
+                params![index, now_secs()],
+            )?;
+        }
+    }
+    tx.commit()?;
+    Ok(DeleteResult { file_name })
+}
+
+fn seed_index_from_file_name(file_name: &str) -> Option<i64> {
+    let prefix = "seed-";
+    let suffix = ".wav";
+    if file_name.starts_with(prefix) && file_name.ends_with(suffix) {
+        file_name[prefix.len()..file_name.len() - suffix.len()]
+            .parse::<i64>()
+            .ok()
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -839,6 +1240,97 @@ mod tests {
         assert_eq!(get_vocabulary(&conn).unwrap().len(), 1);
         remove_from_vocabulary(&conn, 1).unwrap();
         assert_eq!(get_vocabulary(&conn).unwrap().len(), 0);
+    }
+
+    #[test]
+    fn seed_listening_clips_are_created() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let clips: i64 = conn
+            .query_row("SELECT COUNT(*) FROM listening_clips", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(clips, 20);
+        let segments: i64 = conn
+            .query_row("SELECT COUNT(*) FROM listening_segments", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(segments, 20);
+
+        // Re-running is idempotent.
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let clips_again: i64 = conn
+            .query_row("SELECT COUNT(*) FROM listening_clips", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(clips_again, 20);
+
+        let dir = std::env::temp_dir().join(format!("janus-media-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let catalog = get_audio_catalog(&conn, &dir).unwrap();
+        assert_eq!(catalog.len(), 20);
+        assert!(catalog[0].file_path.ends_with("seed-01.wav"));
+        assert!(catalog[0].duration_ms > 1000);
+        assert_eq!(catalog[0].dictation_attempts, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn listening_detail_has_segments() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let detail = get_listening_detail(&conn, 1).unwrap();
+        assert_eq!(detail.clip.title, "It depends on how you look at it.");
+        assert_eq!(detail.segments.len(), 1);
+        assert_eq!(detail.segments[0].text_en, detail.clip.title);
+        assert_eq!(detail.segments[0].end_ms, detail.clip.duration_ms);
+    }
+
+    #[test]
+    fn record_dictation_judges_correctness() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let ok = record_dictation(
+            &mut conn,
+            1,
+            1,
+            "It depends on how you look at it.".to_string(),
+            8000,
+        )
+        .unwrap();
+        assert!(ok.correct);
+        let typo = record_dictation(
+            &mut conn,
+            1,
+            1,
+            "It depends on how you look at this".to_string(),
+            7000,
+        )
+        .unwrap();
+        assert!(!typo.correct);
+
+        let stats = get_dictation_stats(&conn).unwrap();
+        assert_eq!(stats.total_attempts, 2);
+        assert_eq!(stats.correct_attempts, 1);
+        assert_eq!(stats.accuracy_percent, 50);
+        assert_eq!(stats.today_attempts, 2);
+        assert_eq!(stats.today_correct, 1);
+        assert_eq!(stats.weakest_clips.len(), 1);
+        assert_eq!(stats.weakest_clips[0].clip_id, 1);
+        assert_eq!(stats.weakest_clips[0].accuracy_percent, 50);
+    }
+
+    #[test]
+    fn delete_seed_audio_marks_tombstone() {
+        let mut conn = test_conn();
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let result = delete_seed_audio(&mut conn, 1).unwrap();
+        assert_eq!(result.file_name, "seed-01.wav");
+        assert!(get_listening_detail(&conn, 1).is_err());
+
+        // The deleted seed clip must not be resurrected by a later ensure pass.
+        ensure_seed_listening_clips(&mut conn).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM listening_clips", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 19);
     }
 }
 #[test]

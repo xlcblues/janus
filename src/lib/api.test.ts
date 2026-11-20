@@ -8,12 +8,17 @@ describe("api browser preview fallback", () => {
     await expect(api.getReviewQueue()).rejects.toThrow(PREVIEW_MESSAGE);
     await expect(api.getSentences()).rejects.toThrow(PREVIEW_MESSAGE);
     await expect(api.getVocabulary()).rejects.toThrow(PREVIEW_MESSAGE);
+    await expect(api.getAudioCatalog()).rejects.toThrow(PREVIEW_MESSAGE);
+    await expect(api.getListeningDetail(1)).rejects.toThrow(PREVIEW_MESSAGE);
+    await expect(api.getDictationStats()).rejects.toThrow(PREVIEW_MESSAGE);
   });
 
   it("throws the preview message for mutations outside the Tauri runtime", async () => {
     await expect(api.answerWord(1, 3, 1000)).rejects.toThrow(PREVIEW_MESSAGE);
     await expect(api.completeSentence(1, true, 1000)).rejects.toThrow(PREVIEW_MESSAGE);
     await expect(api.addToVocabulary(1)).rejects.toThrow(PREVIEW_MESSAGE);
+    await expect(api.recordDictation(1, 2, "hello", 5000)).rejects.toThrow(PREVIEW_MESSAGE);
+    await expect(api.deleteSeedAudio(1)).rejects.toThrow(PREVIEW_MESSAGE);
   });
 });
 

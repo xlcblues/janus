@@ -3,6 +3,7 @@ mod db;
 mod llm;
 mod reminder;
 mod seed_audio;
+mod seed_words;
 mod update;
 
 use crate::asr::AsrEngine;
@@ -105,6 +106,39 @@ fn get_review_queue(
     limit: Option<i64>,
 ) -> Result<Vec<db::WordCard>, String> {
     with_db_read(state.inner(), |conn| db::get_review_queue(conn, limit))
+}
+
+#[tauri::command]
+fn get_wordbooks(state: tauri::State<'_, AppState>) -> Result<Vec<db::Wordbook>, String> {
+    with_db_read(state.inner(), db::get_wordbooks)
+}
+
+#[tauri::command]
+fn get_learning_config(state: tauri::State<'_, AppState>) -> Result<db::LearningConfig, String> {
+    with_db_read(state.inner(), db::get_learning_config)
+}
+
+#[tauri::command]
+fn save_learning_config(
+    state: tauri::State<'_, AppState>,
+    config: db::LearningConfig,
+) -> Result<(), String> {
+    with_db_write(state.inner(), |conn| db::save_learning_config(conn, &config))
+}
+
+#[tauri::command]
+fn get_daily_queue(
+    state: tauri::State<'_, AppState>,
+    limit: Option<i64>,
+) -> Result<db::DailyQueue, String> {
+    with_db_read(state.inner(), |conn| db::get_daily_queue(conn, limit))
+}
+
+#[tauri::command]
+fn get_wordbook_catalog(
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<db::WordbookCatalogEntry>, String> {
+    with_db_read(state.inner(), db::get_wordbook_catalog)
 }
 
 #[tauri::command]
@@ -727,6 +761,11 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             is_window_maximized,
             close_window,
             get_review_queue,
+            get_wordbooks,
+            get_learning_config,
+            save_learning_config,
+            get_daily_queue,
+            get_wordbook_catalog,
             get_word_catalog,
             get_overview,
             answer_word,

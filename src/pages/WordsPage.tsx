@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bookmark, BookmarkCheck, BookOpen, RotateCcw } from "lucide-react";
 import { api, PREVIEW_MESSAGE, toUserMessage } from "../lib/api";
-import type { Overview, WordCard } from "../lib/api";
+import type { DailyQueue, LearningConfig, Overview, WordCard, Wordbook } from "../lib/api";
 import type { NavId } from "../data/navigation";
 
 const RATINGS = [
@@ -30,6 +30,9 @@ function nextReviewText(card: WordCard): string {
 
 export function WordsPage({ onNotify }: WordsPageProps) {
   const [overview, setOverview] = useState<Overview | null>(null);
+  const [dailyQueue, setDailyQueue] = useState<DailyQueue | null>(null);
+  const [wordbooks, setWordbooks] = useState<Wordbook[]>([]);
+  const [learningConfig, setLearningConfig] = useState<LearningConfig | null>(null);
   const [queue, setQueue] = useState<WordCard[]>([]);
   const [cursor, setCursor] = useState(0);
   const [flipped, setFlipped] = useState(false);
@@ -40,18 +43,24 @@ export function WordsPage({ onNotify }: WordsPageProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextOverview, nextQueue] = await Promise.all([
+      const [nextOverview, nextQueue, nextBooks, nextConfig] = await Promise.all([
         api.getOverview(),
-        api.getReviewQueue(10),
+        api.getDailyQueue(10),
+        api.getWordbooks(),
+        api.getLearningConfig(),
       ]);
       setOverview(nextOverview);
-      setQueue(nextQueue);
+      setDailyQueue(nextQueue);
+      setQueue(nextQueue.cards);
+      setWordbooks(nextBooks);
+      setLearningConfig(nextConfig);
       setCursor(0);
       setFlipped(false);
       setNotice(null);
     } catch (error) {
       setNotice(toUserMessage(error));
       setQueue([]);
+      setDailyQueue(null);
     }
   }, []);
 
@@ -68,7 +77,7 @@ export function WordsPage({ onNotify }: WordsPageProps) {
     const durationMs = Date.now() - startedAt.current;
     try {
       const updated = await api.answerWord(current.id, rating, durationMs);
-      setFeedback(`已记录「${RATINGS[rating - 1].label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}`);
+      setFeedback(`已记录「${RATINGS[rating - 1].label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}，难度系数 ${updated.difficulty.toFixed(2)}`);
       startedAt.current = Date.now();
       if (cursor + 1 < queue.length) {
         setCursor((index) => index + 1);
@@ -127,8 +136,29 @@ export function WordsPage({ onNotify }: WordsPageProps) {
               <span><b>{overview.learned_words}</b> 学过</span>
             </>
           ) : null}
+          {dailyQueue ? (
+            <>
+              <span><b>{dailyQueue.new_count}</b> 新词</span>
+              <span><b>{dailyQueue.review_count}</b> 复习</span>
+            </>
+          ) : null}
         </div>
       </section>
+
+      {learningConfig && wordbooks.length > 0 ? (
+        <section className="daily-plan-bar" aria-label="今日词书计划">
+          <span className="daily-plan-label">今日词书</span>
+          {wordbooks
+            .filter((book) => learningConfig.book_codes.includes(book.code))
+            .map((book) => (
+              <span key={book.code} className="book-chip">{book.title}</span>
+            ))}
+          <span className="daily-plan-meta">
+            新词 {learningConfig.daily_new} · 复习 {learningConfig.daily_review} ·{" "}
+            {learningConfig.selection_mode === "custom" ? "自定义选词" : "随机选词"}
+          </span>
+        </section>
+      ) : null}
 
       {notice ? <div className="notice-bar">{notice}</div> : null}
 

@@ -6,7 +6,7 @@ Janus 是太阳系软件系列中的 Windows 桌面端语言学习应用。初�
 
 ## 当前阶段
 
-**M8：发布候选已完成（版本与更新 + NSIS 安装包配置）。**
+**M9：词书体系与自适应记忆算法已完成。**
 
 M1 已实现并验收：极简 Logo「双面之门（Janus Gate）」、Janus Iris + Trial Brass 主题 Token、Tauri 2 + React 19 + TypeScript + Vite 8 Windows 桌面壳、自定义标题栏与窗口交互、模块导航（`Ctrl+1` 至 `Ctrl+6`）与 `Ctrl+K` 搜索、1360×820 / 1040×700 响应式验收。
 
@@ -79,6 +79,17 @@ M8 新增并验收：
 - NSIS 安装包：`tauri.conf.json` 切换 bundle 目标为 `nsis`（当前用户安装、简体中文、隐藏语言选择器），`pnpm tauri build` 产出 Windows 安装程序与免安装产物；
 - 回归：Rust 48 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test`、`cargo check --examples`、`pnpm tauri build` 通过。
 
+M9 新增并验收：
+
+- 词书体系：内置 6 本词书（小学 / 初中 / 高中 / 大学 / 雅思 / 专业），共 164 词条、159 个唯一种子词，`seed_words.rs` 幂等播种，M1 遗留单词自动映射进对应词书；
+- 多词书选择：设置页可勾选任意词书组合（默认 高中 + 大学），学习范围随之生效，也可全局关闭范围限制；
+- 选词模式：支持「随机选词」（从已勾选词书中按每日配额随机抽取新词）与「自定义选词」（在范围内逐词勾选想学的单词）；
+- 每日计划：独立设置每日「新词数」与「复习数」（默认 10 / 20），每日队列先到期复习、后随机新词，按配额截断；
+- 自适应记忆算法：以「词书难度 × 单词内在难度」计算有效难度，复习间隔 `effective_interval = round(base_interval / difficulty)`，难度越高复习越频繁；评分仍按 SM-2 风格四档（重来/模糊/认识/熟练）推进阶段；
+- 学习范围统计：概览、复习队列、掌握度、今日进度均按已勾选词书范围统计；
+- 学习配置持久化：词书勾选、选词模式、每日配额仅存本地（`app_settings`），重启保留；
+- 回归：Rust 60 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
+
 ## 快速开始
 
 环境要求：
@@ -139,17 +150,18 @@ Janus/
   design/              # 设计规范、Token 与高保真预览
   docs/                # 开发流程、功能与技术方案
   src/                 # React UI、组件、页面与样式
-    lib/api.ts         # typed IPC 与统一错误模型（M2–M8）
+    lib/api.ts         # typed IPC 与统一错误模型（M2–M9）
     lib/recorder.ts    # 麦克风录音：16kHz mono PCM16 WAV，仅内存；设备枚举与选择（M4/M7）
-    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M8）
-    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M8）
+    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M9）
+    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M9）
   scripts/             # download-whisper-model.ps1 离线 ASR 模型下载（M4）
   src-tauri/           # Tauri/Rust 壳层、窗口命令与权限
     src/asr.rs         # 离线 whisper ASR 转写（M4）
     src/llm.rs         # OpenAI 兼容 AI 网关：超时/重试/中文错误映射（M5）
     src/reminder.rs    # 每日复习提醒调度：本地时间计算与通知触发（M7）
     src/update.rs       # 版本比较与 GitHub Releases 更新检查（M8）
-    src/db.rs          # SQLite 迁移、SRS、听力/听写/朗读/对话、事件、计划/提醒/语音设备与备份（M2–M7）
+    src/seed_words.rs   # 6 本内置词书种子数据：小学/初中/高中/大学/雅思/专业（M9）
+    src/db.rs          # SQLite 迁移、SRS/自适应记忆、听力/听写/朗读/对话、事件、计划/提醒/语音设备、词书与学习配置（M2–M9）
   dist/                # Vite 生产构建，可重新生成
 ```
 
@@ -167,17 +179,17 @@ Janus/
 
 ## 当前边界
 
-- 单词（SRS 复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
-- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M9 规划；
+- 单词学习（6 本内置词书、随机/自定义选词、每日新词+复习配额、难度自适应 SRS、复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
+- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M10 规划；
 - 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分或模拟 AI 数据；AI 密钥只存本地数据库，不进前端构建；
 - 版本与更新：更新检查基于 GitHub Releases（`xlcblues/janus`），需要联网；无新版、网络失败或平台不支持均有明确中文降级提示；
-- 发布产物：NSIS 安装程序已产出（当前用户安装、简体中文），尚未代码签名，干净机器安装/卸载/升级 E2E 与商店/官网发布留待 M9；
+- 发布产物：NSIS 安装程序已产出（当前用户安装、简体中文），尚未代码签名，干净机器安装/卸载/升级 E2E 与商店/官网发布留待 M10；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）。
 
-## 下一步：M9
+## 下一步：M10
 
-M9 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，以及 Windows 代码签名、干净机器安装/升级/回滚专项验证与发布检查清单。
+M10 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，以及 Windows 代码签名、干净机器安装/升级/回滚专项验证与发布检查清单。
 
 ## 设计边界
 
@@ -188,4 +200,5 @@ M9 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、�
 
 ## 验证状态
 
-截至 2026-11-20，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 42 项 + 前端 13 项）。
+截至 2026-11-23，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 60 项 + 前端 13 项）。
+

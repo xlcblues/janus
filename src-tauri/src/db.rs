@@ -4,8 +4,9 @@ use std::fmt;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::seed_audio::{wav_duration_ms, SEED_CLIPS};
+use crate::seed_words::BOOKS as SEED_BOOKS;
 
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 const MIGRATION_1: &str = r#"
 CREATE TABLE IF NOT EXISTS words (
@@ -239,6 +240,34 @@ CREATE TABLE IF NOT EXISTS app_settings (
 );
 "#;
 
+const MIGRATION_6: &str = r#"
+CREATE TABLE IF NOT EXISTS wordbooks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    level TEXT NOT NULL DEFAULT 'a2',
+    difficulty REAL NOT NULL DEFAULT 1.0,
+    word_count INTEGER NOT NULL DEFAULT 0,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    lang TEXT NOT NULL DEFAULT 'en'
+);
+
+CREATE TABLE IF NOT EXISTS wordbook_words (
+    wordbook_id INTEGER NOT NULL REFERENCES wordbooks(id) ON DELETE CASCADE,
+    word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+    seq INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (wordbook_id, word_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wordbook_words_word ON wordbook_words(word_id);
+CREATE INDEX IF NOT EXISTS idx_wordbook_words_book ON wordbook_words(wordbook_id, word_id);
+
+ALTER TABLE words ADD COLUMN difficulty REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE word_states ADD COLUMN difficulty REAL NOT NULL DEFAULT 1.0;
+ALTER TABLE word_states ADD COLUMN introduced_at INTEGER;
+"#;
+
 #[derive(Debug)]
 pub enum AppError {
     Sqlite(rusqlite::Error),
@@ -301,7 +330,40 @@ pub struct WordCard {
     pub stage: String,
     pub interval_days: i64,
     pub due_at: i64,
+    pub difficulty: f64,
     pub in_vocabulary: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Wordbook {
+    pub id: i64,
+    pub code: String,
+    pub title: String,
+    pub description: String,
+    pub level: String,
+    pub difficulty: f64,
+    pub word_count: i64,
+    pub sort_order: i64,
+    pub lang: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DailyQueue {
+    pub cards: Vec<WordCard>,
+    pub new_count: i64,
+    pub review_count: i64,
+    pub total_done_today: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WordbookCatalogEntry {
+    pub word_id: i64,
+    pub word: String,
+    pub phonetic: String,
+    pub meaning: String,
+    pub difficulty: f64,
+    pub level: String,
+    pub book_codes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -508,6 +570,8 @@ struct SrsState {
     repetitions: i64,
     lapses: i64,
     due_at: i64,
+    difficulty: f64,
+    introduced_at: Option<i64>,
 }
 
 pub fn now_secs() -> i64 {
@@ -558,6 +622,12 @@ fn migrate(conn: &mut Connection) -> SqliteResult<()> {
         tx.execute_batch("PRAGMA user_version = 5;")?;
         tx.commit()?;
     }
+    if version < 6 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_6)?;
+        tx.execute_batch("PRAGMA user_version = 6;")?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -565,6 +635,7 @@ pub fn open(path: &Path) -> Result<Connection, AppError> {
     let mut conn = Connection::open(path)?;
     configure(&conn)?;
     migrate(&mut conn)?;
+    ensure_wordbook_seed(&mut conn)?;
     Ok(conn)
 }
 
@@ -573,7 +644,156 @@ pub fn open_in_memory() -> Result<Connection, AppError> {
     let mut conn = Connection::open_in_memory()?;
     configure(&conn)?;
     migrate(&mut conn)?;
+    ensure_wordbook_seed(&mut conn)?;
     Ok(conn)
+}
+
+/// 幂等写入 M9 词书与种子词库：词书、单词、词书-单词关联与单词状态。
+/// 已有单词只补充关联，不覆盖用户数据；新单词同步创建初始 word_states。
+pub fn ensure_wordbook_seed(conn: &mut Connection) -> Result<(), AppError> {
+    let now = now_secs();
+    let tx = conn.transaction()?;
+    for book in SEED_BOOKS {
+        let existing_book: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM wordbooks WHERE code = ?1",
+                params![book.code],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let book_id: i64 = match existing_book {
+            Some(id) => id,
+            None => {
+                tx.execute(
+                    "INSERT INTO wordbooks (code, title, description, level, difficulty, word_count, sort_order, lang)
+                     VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6, 'en')",
+                    params![
+                        book.code,
+                        book.title,
+                        book.description,
+                        book.level,
+                        book.difficulty,
+                        book.sort_order
+                    ],
+                )?;
+                tx.last_insert_rowid()
+            }
+        };
+        for (index, seed) in book.words.iter().enumerate() {
+            let existing_word: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM words WHERE word = ?1",
+                    params![seed.word],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let word_id: i64 = match existing_word {
+                Some(id) => id,
+                None => {
+                    tx.execute(
+                        "INSERT INTO words (word, phonetic, meaning, example_en, example_zh, level, lang, difficulty)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'en', ?7)",
+                        params![
+                            seed.word,
+                            seed.phonetic,
+                            seed.meaning,
+                            seed.example_en,
+                            seed.example_zh,
+                            book.level,
+                            seed.difficulty
+                        ],
+                    )?;
+                    let id = tx.last_insert_rowid();
+                    let effective = (book.difficulty * seed.difficulty).clamp(0.5, 2.0);
+                    tx.execute(
+                        "INSERT INTO word_states (word_id, stage, interval_days, ease, repetitions, lapses,
+                                                  due_at, created_at, difficulty, introduced_at)
+                         VALUES (?1, 'new', 0, 2.5, 0, 0, ?2, ?2, ?3, NULL)",
+                        params![id, now, effective],
+                    )?;
+                    id
+                }
+            };
+            tx.execute(
+                "INSERT OR IGNORE INTO wordbook_words (wordbook_id, word_id, seq) VALUES (?1, ?2, ?3)",
+                params![book_id, word_id, index as i64 + 1],
+            )?;
+        }
+        tx.execute(
+            "UPDATE wordbooks SET word_count = (SELECT COUNT(*) FROM wordbook_words WHERE wordbook_id = ?1)
+             WHERE id = ?1",
+            params![book_id],
+        )?;
+    }
+
+    // 迁移 1 遗留单词按难度映射进对应词书，保证旧数据进入学习队列且可被统计。
+    let mut orphan_stmt = tx.prepare(
+        "SELECT w.id, w.level FROM words w
+         WHERE NOT EXISTS (SELECT 1 FROM wordbook_words ww WHERE ww.word_id = w.id)",
+    )?;
+    let orphans: Vec<(i64, String)> = orphan_stmt
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    drop(orphan_stmt);
+    let level_book: &[(&str, &str)] = &[
+        ("a1", "primary"),
+        ("a2", "primary"),
+        ("b1", "senior"),
+        ("b2", "college"),
+        ("c1", "ielts"),
+        ("c2", "professional"),
+    ];
+    for (word_id, level) in orphans {
+        let target = level_book
+            .iter()
+            .find(|(lvl, _)| *lvl == level)
+            .map(|(_, code)| *code);
+        if let Some(code) = target {
+            let book_id: Option<i64> = tx
+                .query_row("SELECT id FROM wordbooks WHERE code = ?1", [code], |row| row.get(0))
+                .optional()?;
+            if let Some(book_id) = book_id {
+                let seq: i64 = tx.query_row(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM wordbook_words WHERE wordbook_id = ?1",
+                    [book_id],
+                    |row| row.get(0),
+                )?;
+                tx.execute(
+                    "INSERT OR IGNORE INTO wordbook_words (wordbook_id, word_id, seq) VALUES (?1, ?2, ?3)",
+                    params![book_id, word_id, seq],
+                )?;
+            }
+        }
+    }
+    // 迁移 1 遗留单词的难度快照按所属词书补齐：只在难度仍为默认 1.0 时更新，
+    // 不覆盖新词已按「词书 × 内在难度」计算的难度；重复打开幂等。
+    tx.execute(
+        "UPDATE word_states
+         SET difficulty = (
+             SELECT b.difficulty FROM wordbook_words ww
+             JOIN wordbooks b ON b.id = ww.wordbook_id
+             WHERE ww.word_id = word_states.word_id
+             ORDER BY b.sort_order ASC
+             LIMIT 1
+         )
+         WHERE difficulty = 1.0
+           AND word_id IN (SELECT word_id FROM wordbook_words)",
+        [],
+    )?;
+
+    let book_ids: Vec<i64> = tx
+        .prepare("SELECT id FROM wordbooks")?
+        .query_map([], |row| row.get(0))?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    for book_id in book_ids {
+        tx.execute(
+            "UPDATE wordbooks SET word_count = (SELECT COUNT(*) FROM wordbook_words WHERE wordbook_id = ?1)
+             WHERE id = ?1",
+            params![book_id],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 fn word_card_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<WordCard> {
@@ -587,13 +807,14 @@ fn word_card_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<WordCard> {
         stage: row.get(6)?,
         interval_days: row.get(7)?,
         due_at: row.get(8)?,
-        in_vocabulary: row.get::<_, i64>(9)? != 0,
+        difficulty: row.get(9)?,
+        in_vocabulary: row.get::<_, i64>(10)? != 0,
     })
 }
 
 const WORD_CARD_SELECT: &str = "
 SELECT w.id, w.word, w.phonetic, w.meaning, w.example_en, w.example_zh,
-       s.stage, s.interval_days, s.due_at,
+       s.stage, s.interval_days, s.due_at, s.difficulty,
        EXISTS(SELECT 1 FROM vocabulary v WHERE v.word_id = w.id) AS in_vocabulary
 FROM words w
 JOIN word_states s ON s.word_id = w.id
@@ -602,13 +823,213 @@ JOIN word_states s ON s.word_id = w.id
 pub fn get_review_queue(conn: &Connection, limit: Option<i64>) -> Result<Vec<WordCard>, AppError> {
     let limit = limit.unwrap_or(10).clamp(1, 100);
     let now = now_secs();
+    let (scope, params) = scope_sql(conn)?;
     let mut stmt = conn.prepare(&format!(
-        "{WORD_CARD_SELECT} WHERE s.due_at <= ?1 ORDER BY s.due_at ASC, w.id ASC LIMIT ?2"
+        "{WORD_CARD_SELECT} WHERE s.due_at <= ? {scope} ORDER BY s.due_at ASC, w.id ASC LIMIT ?"
     ))?;
+    let mut all: Vec<&dyn rusqlite::ToSql> = vec![&now];
+    all.extend(bind_scope(&params));
+    all.push(&limit);
     let cards = stmt
-        .query_map(params![now, limit], word_card_from_row)?
+        .query_map(all.as_slice(), word_card_from_row)?
         .collect::<SqliteResult<Vec<_>>>()?;
     Ok(cards)
+}
+
+/// 当前学习范围（已选词书或自定义选词）对应的 SQL 片段与参数。
+/// 片段形如 `AND w.id IN (...)`，参数按出现顺序绑定。
+fn scope_sql(conn: &Connection) -> Result<(String, Vec<String>), AppError> {
+    let config = get_learning_config(conn)?;
+    if !config.enabled {
+        return Ok((String::new(), Vec::new()));
+    }
+    if config.selection_mode == "custom" && !config.custom_word_ids.is_empty() {
+        let placeholders = vec!["?"; config.custom_word_ids.len()].join(",");
+        let sql = format!("AND w.id IN ({placeholders})");
+        let params = config.custom_word_ids.iter().map(|id| id.to_string()).collect();
+        return Ok((sql, params));
+    }
+    if config.book_codes.is_empty() {
+        return Ok((String::new(), Vec::new()));
+    }
+    let placeholders = vec!["?"; config.book_codes.len()].join(",");
+    let sql = format!(
+        "AND w.id IN (SELECT ww.word_id FROM wordbook_words ww JOIN wordbooks b ON b.id = ww.wordbook_id WHERE b.code IN ({placeholders}))"
+    );
+    Ok((sql, config.book_codes.clone()))
+}
+
+fn bind_scope<'a>(params: &'a [String]) -> Vec<&'a dyn rusqlite::ToSql> {
+    params
+        .iter()
+        .map(|value| value as &dyn rusqlite::ToSql)
+        .collect()
+}
+
+/// 按当前学习范围统计单词状态数量。predicate 以 ?N 形式占位参数，
+/// extras 先绑定，随后追加范围参数；返回范围内单词数。
+fn scoped_count(
+    conn: &Connection,
+    predicate: &str,
+    extras: &[&dyn rusqlite::ToSql],
+) -> Result<i64, AppError> {
+    let (scope, scope_params) = scope_sql(conn)?;
+    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    params.extend(extras.iter().copied());
+    params.extend(bind_scope(&scope_params));
+    let sql = format!(
+        "SELECT COUNT(*) FROM word_states s JOIN words w ON w.id = s.word_id
+         WHERE {predicate} {scope}"
+    );
+    Ok(conn.query_row(&sql, params.as_slice(), |row| row.get(0))?)
+}
+
+pub fn get_wordbooks(conn: &Connection) -> Result<Vec<Wordbook>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, code, title, description, level, difficulty, word_count, sort_order, lang
+         FROM wordbooks ORDER BY sort_order ASC, id ASC",
+    )?;
+    let books = stmt
+        .query_map([], |row| {
+            Ok(Wordbook {
+                id: row.get(0)?,
+                code: row.get(1)?,
+                title: row.get(2)?,
+                description: row.get(3)?,
+                level: row.get(4)?,
+                difficulty: row.get(5)?,
+                word_count: row.get(6)?,
+                sort_order: row.get(7)?,
+                lang: row.get(8)?,
+            })
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    Ok(books)
+}
+
+/// 每日学习队列：先到期复习、后随机新词；按学习配置的每日新词/复习配额截断。
+pub fn get_daily_queue(conn: &Connection, limit: Option<i64>) -> Result<DailyQueue, AppError> {
+    let config = get_learning_config(conn)?;
+    let now = now_secs();
+    let today_start = now - (now % 86400);
+    let review_limit = config.daily_review.max(0).min(300) as usize;
+    let new_limit = config.daily_new.max(0).min(300) as usize;
+    let total_limit = limit
+        .unwrap_or((review_limit + new_limit) as i64)
+        .clamp(1, 500) as usize;
+    let (scope, params) = scope_sql(conn)?;
+
+    let review_cards: Vec<WordCard> = if review_limit > 0 {
+        let sql = format!(
+            "{WORD_CARD_SELECT} WHERE s.due_at <= ? AND s.stage <> 'new' {scope}
+             ORDER BY s.due_at ASC, w.id ASC LIMIT ?"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut all: Vec<&dyn rusqlite::ToSql> = vec![&now];
+        all.extend(bind_scope(&params));
+        let review_limit_i64 = review_limit as i64;
+        all.push(&review_limit_i64);
+        let rows = stmt.query_map(all.as_slice(), word_card_from_row)?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        rows
+    } else {
+        Vec::new()
+    };
+
+    let new_cards: Vec<WordCard> = if new_limit > 0 {
+        let sql = format!(
+            "{WORD_CARD_SELECT} WHERE s.stage = 'new' {scope} ORDER BY RANDOM() LIMIT ?"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let mut all: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        all.extend(bind_scope(&params));
+        let new_limit_i64 = new_limit as i64;
+        all.push(&new_limit_i64);
+        let rows = stmt.query_map(all.as_slice(), word_card_from_row)?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        rows
+    } else {
+        Vec::new()
+    };
+
+    let mut cards = review_cards;
+    let review_count = cards.len().min(total_limit);
+    let space = total_limit.saturating_sub(cards.len());
+    let new_count = if space > 0 {
+        let taken = new_cards.len().min(space);
+        for card in new_cards.into_iter().take(taken) {
+            cards.push(card);
+        }
+        taken
+    } else {
+        0
+    };
+    cards.truncate(total_limit);
+
+    let total_done_today: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM study_events WHERE kind = 'word_review' AND created_at >= ?1",
+        [today_start],
+        |row| row.get(0),
+    )?;
+
+    Ok(DailyQueue {
+        cards,
+        new_count: new_count as i64,
+        review_count: review_count as i64,
+        total_done_today,
+    })
+}
+
+/// 已选词书内全部单词（含难度与所属词书），用于自定义选词。
+/// 无论选词模式如何，都按已勾选词书返回，方便用户在自定义模式下勾选单词。
+pub fn get_wordbook_catalog(conn: &Connection) -> Result<Vec<WordbookCatalogEntry>, AppError> {
+    let config = get_learning_config(conn)?;
+    let (scope, params) = if config.book_codes.is_empty() {
+        (String::new(), Vec::new())
+    } else {
+        let placeholders = vec!["?"; config.book_codes.len()].join(",");
+        let sql = format!(
+            "AND w.id IN (SELECT ww.word_id FROM wordbook_words ww JOIN wordbooks b ON b.id = ww.wordbook_id WHERE b.code IN ({placeholders}))"
+        );
+        (sql, config.book_codes.clone())
+    };
+    let sql = format!(
+        "SELECT w.id, w.word, w.phonetic, w.meaning, w.difficulty, w.level
+         FROM words w WHERE 1 = 1 {scope} ORDER BY w.id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows: Vec<(i64, String, String, String, f64, String)> = stmt
+        .query_map(bind_scope(&params).as_slice(), |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        })?
+        .collect::<SqliteResult<Vec<_>>>()?;
+    let mut entries = Vec::with_capacity(rows.len());
+    for (word_id, word, phonetic, meaning, difficulty, level) in rows {
+        let mut book_stmt = conn.prepare(
+            "SELECT b.code FROM wordbooks b JOIN wordbook_words ww ON ww.wordbook_id = b.id
+             WHERE ww.word_id = ?1 ORDER BY b.sort_order ASC",
+        )?;
+        let book_codes = book_stmt
+            .query_map([word_id], |row| row.get::<_, String>(0))?
+            .collect::<SqliteResult<Vec<_>>>()?;
+        entries.push(WordbookCatalogEntry {
+            word_id,
+            word,
+            phonetic,
+            meaning,
+            difficulty,
+            level,
+            book_codes,
+        });
+    }
+    Ok(entries)
 }
 
 pub fn get_word_catalog(conn: &Connection) -> Result<Vec<WordCard>, AppError> {
@@ -630,22 +1051,10 @@ pub fn get_word_card(conn: &Connection, word_id: i64) -> Result<Option<WordCard>
 pub fn get_overview(conn: &Connection) -> Result<Overview, AppError> {
     let now = now_secs();
     let today_start = now - (now % 86400);
-    let total_words: i64 = conn.query_row("SELECT COUNT(*) FROM words", [], |row| row.get(0))?;
-    let due_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE due_at <= ?1",
-        [now],
-        |row| row.get(0),
-    )?;
-    let learned_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE stage <> 'new'",
-        [],
-        |row| row.get(0),
-    )?;
-    let mastered_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE stage = 'mastered'",
-        [],
-        |row| row.get(0),
-    )?;
+    let total_words: i64 = scoped_count(conn, "1 = 1", &[])?;
+    let due_words: i64 = scoped_count(conn, "s.due_at <= ?1", &[&now])?;
+    let learned_words: i64 = scoped_count(conn, "s.stage <> 'new'", &[])?;
+    let mastered_words: i64 = scoped_count(conn, "s.stage = 'mastered'", &[])?;
     let total_reviews: i64 = conn.query_row(
         "SELECT COUNT(*) FROM study_events WHERE kind IN ('word_review', 'sentence_event')",
         [],
@@ -668,6 +1077,15 @@ pub fn get_overview(conn: &Connection) -> Result<Overview, AppError> {
     })
 }
 
+/// 按单词难度缩短复习间隔：有效间隔 = 基础间隔 ÷ 难度系数，
+/// 难度越高（>1.0）巩固越频繁，至少 1 天。
+fn effective_interval(base: i64, difficulty: f64) -> i64 {
+    if difficulty <= 0.0 {
+        return base;
+    }
+    ((base as f64) / difficulty).round().max(1.0) as i64
+}
+
 fn next_srs(current: &SrsState, rating: i64) -> SrsState {
     let now = now_secs();
     let mut next = SrsState {
@@ -677,6 +1095,13 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
         repetitions: current.repetitions,
         lapses: current.lapses,
         due_at: current.due_at,
+        difficulty: current.difficulty,
+        introduced_at: current.introduced_at,
+    };
+    let difficulty = if current.difficulty > 0.0 {
+        current.difficulty
+    } else {
+        1.0
     };
 
     match rating {
@@ -690,32 +1115,35 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
         2 => {
             next.repetitions += 1;
             next.ease = (current.ease - 0.15).max(1.30);
-            next.interval_days = if next.repetitions == 1 {
+            let base = if next.repetitions == 1 {
                 1
             } else {
                 ((current.interval_days as f64) * next.ease).round().max(1.0) as i64
             };
+            next.interval_days = effective_interval(base, difficulty);
             next.due_at = now + next.interval_days * 86400;
         }
         3 => {
             next.repetitions += 1;
-            next.interval_days = match next.repetitions {
+            let base = match next.repetitions {
                 1 => 1,
                 2 => 6,
                 _ => ((current.interval_days as f64) * current.ease).round().max(1.0) as i64,
             };
+            next.interval_days = effective_interval(base, difficulty);
             next.due_at = now + next.interval_days * 86400;
         }
         4 => {
             next.repetitions += 1;
             next.ease = (current.ease + 0.15).min(3.00);
-            next.interval_days = match next.repetitions {
+            let base = match next.repetitions {
                 1 => 4,
                 2 => 14,
                 _ => ((current.interval_days as f64) * current.ease * 1.30)
                     .round()
                     .max(1.0) as i64,
             };
+            next.interval_days = effective_interval(base, difficulty);
             next.due_at = now + next.interval_days * 86400;
         }
         _ => {}
@@ -747,7 +1175,7 @@ pub fn answer_word(
     let tx = conn.transaction()?;
     let current: Option<SrsState> = tx
         .query_row(
-            "SELECT stage, interval_days, ease, repetitions, lapses, due_at
+            "SELECT stage, interval_days, ease, repetitions, lapses, due_at, difficulty, introduced_at
              FROM word_states WHERE word_id = ?1",
             [word_id],
             |row| {
@@ -758,6 +1186,8 @@ pub fn answer_word(
                     repetitions: row.get(3)?,
                     lapses: row.get(4)?,
                     due_at: row.get(5)?,
+                    difficulty: row.get(6)?,
+                    introduced_at: row.get(7)?,
                 })
             },
         )
@@ -768,7 +1198,8 @@ pub fn answer_word(
     tx.execute(
         "UPDATE word_states
          SET stage = ?1, interval_days = ?2, ease = ?3, repetitions = ?4,
-             lapses = ?5, due_at = ?6, last_reviewed_at = ?7
+             lapses = ?5, due_at = ?6, last_reviewed_at = ?7,
+             introduced_at = COALESCE(introduced_at, ?9)
          WHERE word_id = ?8",
         params![
             next.stage,
@@ -778,7 +1209,8 @@ pub fn answer_word(
             next.lapses,
             next.due_at,
             now,
-            word_id
+            word_id,
+            now
         ],
     )?;
     let result = if rating >= 3 { 1 } else { 0 };
@@ -944,16 +1376,8 @@ pub fn get_stats(conn: &Connection) -> Result<StudyStats, AppError> {
         [today_start],
         |row| row.get(0),
     )?;
-    let due_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE due_at <= ?1",
-        [now],
-        |row| row.get(0),
-    )?;
-    let mastered_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE stage = 'mastered'",
-        [],
-        |row| row.get(0),
-    )?;
+    let due_words: i64 = scoped_count(conn, "s.due_at <= ?1", &[&now])?;
+    let mastered_words: i64 = scoped_count(conn, "s.stage = 'mastered'", &[])?;
     let vocabulary_count: i64 = conn.query_row("SELECT COUNT(*) FROM vocabulary", [], |row| {
         row.get(0)
     })?;
@@ -1032,8 +1456,15 @@ pub fn clear_learning_data(conn: &mut Connection, data_dir: &Path) -> Result<Cle
     tx.execute("DELETE FROM conversation_sessions", [])?;
     let now = now_secs();
     tx.execute(
-        "INSERT INTO word_states (word_id, stage, interval_days, ease, repetitions, lapses, due_at, created_at)
-         SELECT id, 'new', 0, 2.5, 0, 0, ?1, ?1 FROM words",
+        "INSERT INTO word_states (word_id, stage, interval_days, ease, repetitions, lapses, due_at, created_at, difficulty, introduced_at)
+         SELECT w.id, 'new', 0, 2.5, 0, 0, ?1, ?1,
+                COALESCE(
+                    (SELECT MIN(MAX(b.difficulty * w.difficulty, 0.5), 2.0)
+                     FROM wordbook_words ww JOIN wordbooks b ON b.id = ww.wordbook_id
+                     WHERE ww.word_id = w.id ORDER BY b.sort_order ASC LIMIT 1),
+                    w.difficulty
+                ),
+                NULL FROM words w",
         [now],
     )?;
     tx.execute(
@@ -2166,6 +2597,29 @@ impl Default for ReminderSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LearningConfig {
+    pub enabled: bool,
+    pub book_codes: Vec<String>,
+    pub selection_mode: String,
+    pub custom_word_ids: Vec<i64>,
+    pub daily_new: i64,
+    pub daily_review: i64,
+}
+
+impl Default for LearningConfig {
+    fn default() -> Self {
+        LearningConfig {
+            enabled: true,
+            book_codes: vec!["senior".to_string(), "college".to_string()],
+            selection_mode: "random".to_string(),
+            custom_word_ids: Vec::new(),
+            daily_new: 10,
+            daily_review: 20,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TodayProgress {
     pub word_reviews: i64,
@@ -2223,6 +2677,16 @@ pub fn save_reminder_settings(
     settings: &ReminderSettings,
 ) -> Result<(), AppError> {
     write_setting(conn, REMINDER_KEY, settings)
+}
+
+const LEARNING_CONFIG_KEY: &str = "learning_config";
+
+pub fn get_learning_config(conn: &Connection) -> Result<LearningConfig, AppError> {
+    read_setting(conn, LEARNING_CONFIG_KEY)
+}
+
+pub fn save_learning_config(conn: &Connection, config: &LearningConfig) -> Result<(), AppError> {
+    write_setting(conn, LEARNING_CONFIG_KEY, config)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2351,12 +2815,16 @@ pub fn get_weekly_stats(conn: &Connection, days: Option<i64>) -> Result<Vec<Dail
 
 /// 单词各阶段分布、句子掌握分布与总体掌握度（已开始学习 / 全部单词）。
 pub fn get_mastery_progress(conn: &Connection) -> Result<MasteryProgress, AppError> {
-    let mut word_stmt = conn.prepare(
-        "SELECT stage, COUNT(*) FROM word_states GROUP BY stage ORDER BY
-         CASE stage WHEN 'new' THEN 0 WHEN 'learning' THEN 1 WHEN 'reviewing' THEN 2 ELSE 3 END",
-    )?;
+    let (scope, scope_params) = scope_sql(conn)?;
+    let mut word_stmt = conn.prepare(&format!(
+        "SELECT s.stage, COUNT(*) FROM word_states s JOIN words w ON w.id = s.word_id
+         WHERE 1 = 1 {scope} GROUP BY s.stage ORDER BY
+         CASE s.stage WHEN 'new' THEN 0 WHEN 'learning' THEN 1 WHEN 'reviewing' THEN 2 ELSE 3 END"
+    ))?;
+    let mut word_params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+    word_params.extend(bind_scope(&scope_params));
     let word_stages = word_stmt
-        .query_map([], |row| {
+        .query_map(word_params.as_slice(), |row| {
             Ok(StageCount {
                 stage: row.get(0)?,
                 count: row.get(1)?,
@@ -2377,17 +2845,9 @@ pub fn get_mastery_progress(conn: &Connection) -> Result<MasteryProgress, AppErr
         })?
         .collect::<SqliteResult<Vec<_>>>()?;
 
-    let total_words: i64 = conn.query_row("SELECT COUNT(*) FROM words", [], |row| row.get(0))?;
-    let learned_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE stage <> 'new'",
-        [],
-        |row| row.get(0),
-    )?;
-    let mastered_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE stage = 'mastered'",
-        [],
-        |row| row.get(0),
-    )?;
+    let total_words: i64 = scoped_count(conn, "1 = 1", &[])?;
+    let learned_words: i64 = scoped_count(conn, "s.stage <> 'new'", &[])?;
+    let mastered_words: i64 = scoped_count(conn, "s.stage = 'mastered'", &[])?;
     let vocabulary_count: i64 = conn.query_row("SELECT COUNT(*) FROM vocabulary", [], |row| {
         row.get(0)
     })?;
@@ -2521,11 +2981,7 @@ pub fn get_today_progress(conn: &Connection) -> Result<TodayProgress, AppError> 
         [today_start],
         |row| row.get(0),
     )?;
-    let due_words: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM word_states WHERE due_at <= ?1",
-        [now],
-        |row| row.get(0),
-    )?;
+    let due_words: i64 = scoped_count(conn, "s.due_at <= ?1", &[&now])?;
     let plan = get_study_plan(conn)?;
 
     let plan_percent = if plan.enabled {
@@ -2710,12 +3166,12 @@ mod tests {
         let sentences: i64 = conn
             .query_row("SELECT COUNT(*) FROM sentences", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(words, 20);
+        assert_eq!(words, 159);
         assert_eq!(sentences, 20);
         let due: i64 = conn
             .query_row("SELECT COUNT(*) FROM word_states WHERE due_at <= ?1", [now_secs()], |row| row.get(0))
             .unwrap();
-        assert_eq!(due, 20);
+        assert_eq!(due, 159);
     }
 
     #[test]
@@ -3051,7 +3507,7 @@ mod tests {
         let progress = get_mastery_progress(&conn).unwrap();
         assert_eq!(progress.learned_words, 1);
         assert_eq!(progress.vocabulary_count, 1);
-        assert_eq!(progress.mastery_percent, 5);
+        assert_eq!(progress.mastery_percent, 1);
         let learning = progress
             .word_stages
             .iter()
@@ -3063,7 +3519,7 @@ mod tests {
             .iter()
             .find(|item| item.stage == "new")
             .expect("new stage should exist");
-        assert_eq!(new.count, 19);
+        assert_eq!(new.count, 53);
         assert!(progress
             .sentence_statuses
             .iter()
@@ -3121,7 +3577,7 @@ mod tests {
         ensure_seed_listening_clips(&mut conn).unwrap();
         let before = get_today_progress(&conn).unwrap();
         assert_eq!(before.word_reviews, 0);
-        assert_eq!(before.due_words, 20);
+        assert_eq!(before.due_words, 54);
         assert!(before.plan.enabled);
         assert_eq!(before.plan_percent, 0);
 
@@ -3152,6 +3608,236 @@ mod tests {
         // 完成量 = 10+0+1+0+0+15 = 26，目标总量 = 10+5+3+3+4+18 = 43
         // => 26 * 100 / 43 = 60（向下取整）。
         assert_eq!(after.plan_percent, 60);
+    }
+
+    #[test]
+    fn learning_config_roundtrip() {
+        let mut conn = test_conn();
+        let config = LearningConfig {
+            enabled: true,
+            book_codes: vec!["primary".to_string(), "ielts".to_string()],
+            selection_mode: "random".to_string(),
+            custom_word_ids: Vec::new(),
+            daily_new: 5,
+            daily_review: 15,
+        };
+        save_learning_config(&mut conn, &config).unwrap();
+        let loaded = get_learning_config(&conn).unwrap();
+        assert_eq!(loaded.book_codes, config.book_codes);
+        assert_eq!(loaded.selection_mode, "random");
+        assert_eq!(loaded.daily_new, 5);
+        assert_eq!(loaded.daily_review, 15);
+        assert!(loaded.enabled);
+    }
+
+    #[test]
+    fn learning_config_has_defaults() {
+        let conn = test_conn();
+        let config = get_learning_config(&conn).unwrap();
+        assert!(config.enabled);
+        assert!(config.book_codes.contains(&"senior".to_string()));
+        assert!(config.book_codes.contains(&"college".to_string()));
+        assert_eq!(config.selection_mode, "random");
+        assert_eq!(config.daily_new, 10);
+        assert_eq!(config.daily_review, 20);
+    }
+
+    #[test]
+    fn wordbooks_and_catalog_available() {
+        let conn = test_conn();
+        let books = get_wordbooks(&conn).unwrap();
+        assert_eq!(books.len(), 6);
+        let codes: Vec<&str> = books.iter().map(|book| book.code.as_str()).collect();
+        assert!(codes.contains(&"primary"));
+        assert!(codes.contains(&"ielts"));
+        assert!(codes.contains(&"professional"));
+
+        let catalog = get_wordbook_catalog(&conn).unwrap();
+        assert_eq!(catalog.len(), 54);
+        for entry in &catalog {
+            assert!(!entry.book_codes.is_empty());
+        }
+        let senior = books.iter().find(|book| book.code == "senior").unwrap();
+        let senior_count = catalog
+            .iter()
+            .filter(|entry| entry.book_codes.contains(&"senior".to_string()))
+            .count();
+        assert_eq!(senior.word_count as usize, senior_count);
+        assert!(senior.word_count > 0);
+    }
+
+    #[test]
+    fn wordbook_seed_is_idempotent() {
+        let mut conn = test_conn();
+        let before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM words", [], |row| row.get(0))
+            .unwrap();
+        let books_before: i64 = conn
+            .query_row("SELECT COUNT(*) FROM wordbooks", [], |row| row.get(0))
+            .unwrap();
+        ensure_wordbook_seed(&mut conn).unwrap();
+        let after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM words", [], |row| row.get(0))
+            .unwrap();
+        let books_after: i64 = conn
+            .query_row("SELECT COUNT(*) FROM wordbooks", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(before, after);
+        assert_eq!(books_before, books_after);
+        let books = get_wordbooks(&conn).unwrap();
+        assert_eq!(books.len(), 6);
+    }
+
+    #[test]
+    fn legacy_words_map_into_books() {
+        let conn = test_conn();
+        let mapped: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM wordbook_words ww
+                 JOIN wordbooks b ON b.id = ww.wordbook_id
+                 JOIN words w ON w.id = ww.word_id
+                 WHERE w.word IN ('threshold', 'fluent')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mapped, 2);
+        // threshold 已存在于 college 种子词表 -> 难度按词书补齐为 1.3；
+        // fluent（a2）不在任何种子词表 -> 按遗留映射进 primary（0.7）。
+        let difficulty: f64 = conn
+            .query_row(
+                "SELECT s.difficulty FROM word_states s JOIN words w ON w.id = s.word_id
+                 WHERE w.word = 'threshold'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!((difficulty - 1.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scope_filters_review_queue() {
+        let conn = test_conn();
+        let queue = get_review_queue(&conn, Some(100)).unwrap();
+        assert_eq!(queue.len(), 54);
+        for card in &queue {
+            let codes: Option<String> = conn
+                .query_row(
+                    "SELECT GROUP_CONCAT(b.code) FROM wordbook_words ww
+                     JOIN wordbooks b ON b.id = ww.wordbook_id
+                     WHERE ww.word_id = ?1",
+                    [card.id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap();
+            let codes = codes.unwrap_or_default();
+            assert!(
+                codes.split(',').any(|code| code == "senior" || code == "college"),
+                "词 {} 不在默认范围内",
+                card.word
+            );
+        }
+
+        let config = LearningConfig {
+            enabled: false,
+            ..LearningConfig::default()
+        };
+        save_learning_config(&conn, &config).unwrap();
+        let global = get_review_queue(&conn, Some(200)).unwrap();
+        // get_review_queue 的 limit 被 clamp 到 [1, 100]，200 只会返回 100 张。
+        assert_eq!(global.len(), 100);
+    }
+
+    #[test]
+    fn daily_queue_mixes_review_and_new() {
+        let mut conn = test_conn();
+        let config = LearningConfig {
+            enabled: true,
+            book_codes: vec!["senior".to_string(), "college".to_string()],
+            selection_mode: "random".to_string(),
+            custom_word_ids: Vec::new(),
+            daily_new: 5,
+            daily_review: 10,
+        };
+        save_learning_config(&mut conn, &config).unwrap();
+
+        // 把 word 1 手动置为到期复习，验证复习在前、新词补足。
+        conn.execute(
+            "UPDATE word_states SET stage = 'learning', interval_days = 1, due_at = ?1
+             WHERE word_id = 1",
+            [now_secs()],
+        )
+        .unwrap();
+
+        let queue = get_daily_queue(&conn, Some(15)).unwrap();
+        assert!(!queue.cards.is_empty());
+        assert_eq!(queue.cards[0].id, 1);
+        assert!(queue.new_count <= 5);
+        assert!(queue.review_count >= 1);
+        assert!(queue.cards.len() <= 15);
+        assert!(queue.total_done_today >= 0);
+    }
+
+    #[test]
+    fn adaptive_srs_respects_difficulty() {
+        let mut conn = test_conn();
+        // 高难度词（threshold，college 1.3）：首次「熟练」间隔 = round(4 / 1.3) = 3 天。
+        let hard = answer_word(&mut conn, 1, 4, 5000).unwrap();
+        assert_eq!(hard.interval_days, 3);
+        assert!(hard.difficulty > 1.0);
+
+        // 低难度词（apple，primary 0.7）：首次「熟练」间隔 = round(4 / 0.7) = 6 天。
+        let easy = answer_word(&mut conn, 21, 4, 5000).unwrap();
+        assert_eq!(easy.interval_days, 6);
+        assert!(easy.difficulty < 1.0);
+
+        // 答错「重来」：repetitions 归零、lapses 增加、ease 下调。
+        let reset = answer_word(&mut conn, 1, 1, 3000).unwrap();
+        assert_eq!(reset.stage, "new");
+        assert_eq!(reset.interval_days, 0);
+        let state: (i64, i64, f64) = conn
+            .query_row(
+                "SELECT repetitions, lapses, ease FROM word_states WHERE word_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(state.0, 0);
+        assert_eq!(state.1, 1);
+        assert!(state.2 < 2.65);
+
+        // 首次回答会记录 introduced_at。
+        let introduced: Option<i64> = conn
+            .query_row(
+                "SELECT introduced_at FROM word_states WHERE word_id = 21",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(introduced.is_some());
+    }
+
+    #[test]
+    fn clear_resets_difficulty() {
+        let dir = std::env::temp_dir().join(format!("janus-clear-diff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut conn = test_conn();
+        answer_word(&mut conn, 1, 3, 5000).unwrap();
+        clear_learning_data(&mut conn, &dir).unwrap();
+        let state: (String, i64, Option<i64>, f64) = conn
+            .query_row(
+                "SELECT stage, interval_days, introduced_at, difficulty
+                 FROM word_states WHERE word_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(state.0, "new");
+        assert_eq!(state.1, 0);
+        assert!(state.2.is_none());
+        assert!((state.3 - 1.3).abs() < 1e-6);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 #[test]
@@ -3196,12 +3882,9 @@ fn export_and_clear_learning_data() {
     let stats = get_stats(&conn).unwrap();
     assert_eq!(stats.total_reviews, 0);
     assert_eq!(stats.vocabulary_count, 0);
-    assert_eq!(stats.due_words, 20);
+    assert_eq!(stats.due_words, 54);
     let overview = get_overview(&conn).unwrap();
     assert_eq!(overview.learned_words, 0);
 
     let _ = std::fs::remove_dir_all(&dir);
 }
-
-
-

@@ -1,13 +1,22 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, CalendarCheck, CloudOff, Download, Mic, Save } from "lucide-react";
+import { Bell, CalendarCheck, CloudOff, Download, Library, Mic, Save } from "lucide-react";
 import {
   api,
+  emptyLearningConfig,
   emptyMicrophoneSettings,
   emptyReminderSettings,
   emptyStudyPlan,
   toUserMessage,
 } from "../lib/api";
-import type { MicrophoneSettings, ReminderSettings, StudyPlan, UpdateCheck } from "../lib/api";
+import type {
+  LearningConfig,
+  MicrophoneSettings,
+  ReminderSettings,
+  StudyPlan,
+  UpdateCheck,
+  Wordbook,
+  WordbookCatalogEntry,
+} from "../lib/api";
 import { listMicrophoneDevices, probeMicrophoneDevices } from "../lib/recorder";
 import type { MicrophoneDevice } from "../lib/recorder";
 
@@ -40,6 +49,9 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
   const [plan, setPlan] = useState<StudyPlan>(emptyStudyPlan);
   const [reminder, setReminder] = useState<ReminderSettings>(emptyReminderSettings);
   const [mic, setMic] = useState<MicrophoneSettings>(emptyMicrophoneSettings);
+  const [learningConfig, setLearningConfig] = useState<LearningConfig>(emptyLearningConfig);
+  const [wordbooks, setWordbooks] = useState<Wordbook[]>([]);
+  const [catalog, setCatalog] = useState<WordbookCatalogEntry[]>([]);
   const [devices, setDevices] = useState<MicrophoneDevice[]>([]);
   const [notificationState, setNotificationState] = useState<"granted" | "denied" | "prompt" | null>(null);
   const [loaded, setLoaded] = useState(false);
@@ -54,14 +66,20 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextPlan, nextReminder, nextMic] = await Promise.all([
+      const [nextPlan, nextReminder, nextMic, nextLearning, nextBooks, nextCatalog] = await Promise.all([
         api.getStudyPlan(),
         api.getReminderSettings(),
         api.getMicrophoneSettings(),
+        api.getLearningConfig(),
+        api.getWordbooks(),
+        api.getWordbookCatalog(),
       ]);
       setPlan(nextPlan);
       setReminder(nextReminder);
       setMic(nextMic);
+      setLearningConfig(nextLearning);
+      setWordbooks(nextBooks);
+      setCatalog(nextCatalog);
       setLoaded(true);
       setNotice(null);
     } catch (error) {
@@ -118,6 +136,30 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
     setMic((current) => ({ ...current, device_id: deviceId, device_label: deviceLabel }));
   };
 
+  const updateLearning = (patch: Partial<LearningConfig>) => {
+    setLearningConfig((current) => ({ ...current, ...patch }));
+  };
+
+  const toggleBook = (code: string) => {
+    setLearningConfig((current) => {
+      const has = current.book_codes.includes(code);
+      const book_codes = has
+        ? current.book_codes.filter((item) => item !== code)
+        : [...current.book_codes, code];
+      return { ...current, book_codes };
+    });
+  };
+
+  const toggleCustomWord = (wordId: number) => {
+    setLearningConfig((current) => {
+      const has = current.custom_word_ids.includes(wordId);
+      const custom_word_ids = has
+        ? current.custom_word_ids.filter((id) => id !== wordId)
+        : [...current.custom_word_ids, wordId];
+      return { ...current, custom_word_ids };
+    });
+  };
+
   const handleProbeMicrophones = async () => {
     setNotice(null);
     const nextDevices = await probeMicrophoneDevices();
@@ -168,7 +210,8 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
       await api.saveStudyPlan(nextPlan);
       await api.saveReminderSettings(reminder);
       await api.saveMicrophoneSettings(mic);
-      onNotify("学习计划、提醒与语音设备设置已保存。");
+      await api.saveLearningConfig(learningConfig);
+      onNotify("学习计划、词库、提醒与语音设备设置已保存。");
     } catch (error) {
       setNotice(toUserMessage(error));
     } finally {
@@ -229,6 +272,112 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
                   <small>{field.unit}</small>
                 </div>
               ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="panel settings-panel" aria-labelledby="wordbook-title">
+          <div className="panel-heading">
+            <Library size={16} />
+            <b id="wordbook-title">词库与每日计划</b>
+            <span>wordbook</span>
+          </div>
+          <div className="settings-panel-body">
+            <p className="settings-hint">
+              选择词书并设定每日新词/复习配额；记忆算法会按单词难度与你的评分自动安排复习天数。
+            </p>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={learningConfig.enabled}
+                onChange={(event) => updateLearning({ enabled: event.target.checked })}
+              />
+              <span>启用词书学习范围</span>
+            </label>
+            <div className="wordbook-grid" role="group" aria-label="选择词书">
+              {wordbooks.map((book) => (
+                <label key={book.code} className="wordbook-option">
+                  <input
+                    type="checkbox"
+                    checked={learningConfig.book_codes.includes(book.code)}
+                    onChange={() => toggleBook(book.code)}
+                    disabled={!learningConfig.enabled}
+                  />
+                  <span className="wordbook-option-title">{book.title}</span>
+                  <small>{book.word_count} 词 · 难度 {book.difficulty.toFixed(1)}</small>
+                </label>
+              ))}
+            </div>
+            <div className="selection-mode-row" role="radiogroup" aria-label="选词方式">
+              <span className="settings-subtitle">选词方式</span>
+              <label className="settings-toggle">
+                <input
+                  type="radio"
+                  name="selection-mode"
+                  value="random"
+                  checked={learningConfig.selection_mode === "random"}
+                  onChange={() => updateLearning({ selection_mode: "random" })}
+                />
+                <span>随机选词</span>
+              </label>
+              <label className="settings-toggle">
+                <input
+                  type="radio"
+                  name="selection-mode"
+                  value="custom"
+                  checked={learningConfig.selection_mode === "custom"}
+                  onChange={() => updateLearning({ selection_mode: "custom" })}
+                />
+                <span>自定义选词</span>
+              </label>
+            </div>
+            {learningConfig.selection_mode === "custom" ? (
+              <div className="custom-word-panel">
+                <p className="settings-hint">从所选词书中勾选要学习的单词；未勾选时回退为随机选词。</p>
+                <div className="custom-word-scroll">
+                  {catalog.map((entry) => (
+                    <label key={entry.word_id} className="custom-word-item">
+                      <input
+                        type="checkbox"
+                        checked={learningConfig.custom_word_ids.includes(entry.word_id)}
+                        onChange={() => toggleCustomWord(entry.word_id)}
+                        disabled={!learningConfig.enabled}
+                      />
+                      <span>{entry.word}</span>
+                      <small>{entry.meaning}</small>
+                    </label>
+                  ))}
+                  {catalog.length === 0 ? (
+                    <span className="settings-hint">暂无可用单词，请先选择词书。</span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+            <div className="settings-fields">
+              <div className="field">
+                <span>每日新词</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={learningConfig.daily_new}
+                  onChange={(event) => updateLearning({ daily_new: Number(event.target.value) })}
+                  aria-label="每日新词数量"
+                />
+                <small>个</small>
+              </div>
+              <div className="field">
+                <span>每日复习</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={300}
+                  value={learningConfig.daily_review}
+                  onChange={(event) => updateLearning({ daily_review: Number(event.target.value) })}
+                  aria-label="每日复习数量"
+                />
+                <small>个</small>
+              </div>
             </div>
           </div>
         </section>

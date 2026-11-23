@@ -14,6 +14,7 @@ export interface WordCard {
   stage: string;
   interval_days: number;
   due_at: number;
+  difficulty: number;
   in_vocabulary: boolean;
 }
 
@@ -338,6 +339,44 @@ export interface MicrophoneSettings {
   device_label: string;
 }
 
+export interface Wordbook {
+  id: number;
+  code: string;
+  title: string;
+  description: string;
+  level: string;
+  difficulty: number;
+  word_count: number;
+  sort_order: number;
+  lang: string;
+}
+
+export interface LearningConfig {
+  enabled: boolean;
+  book_codes: string[];
+  selection_mode: string;
+  custom_word_ids: number[];
+  daily_new: number;
+  daily_review: number;
+}
+
+export interface DailyQueue {
+  cards: WordCard[];
+  new_count: number;
+  review_count: number;
+  total_done_today: number;
+}
+
+export interface WordbookCatalogEntry {
+  word_id: number;
+  word: string;
+  phonetic: string;
+  meaning: string;
+  difficulty: number;
+  level: string;
+  book_codes: string[];
+}
+
 export type NotificationPermissionState = "granted" | "denied" | "prompt";
 
 export interface UpdateCheck {
@@ -419,6 +458,15 @@ export const emptyMicrophoneSettings: MicrophoneSettings = {
   device_label: "",
 };
 
+export const emptyLearningConfig: LearningConfig = {
+  enabled: true,
+  book_codes: ["senior", "college"],
+  selection_mode: "random",
+  custom_word_ids: [],
+  daily_new: 10,
+  daily_review: 20,
+};
+
 export const emptyTodayProgress: TodayProgress = {
   word_reviews: 0,
   sentences: 0,
@@ -466,6 +514,12 @@ async function invokeCommand<T>(command: string, args?: Record<string, unknown>)
 
 export const api = {
   getReviewQueue: (limit?: number) => invokeCommand<WordCard[]>("get_review_queue", { limit }),
+  getWordbooks: () => invokeCommand<Wordbook[]>("get_wordbooks"),
+  getLearningConfig: () => invokeCommand<LearningConfig>("get_learning_config"),
+  saveLearningConfig: (config: LearningConfig) =>
+    invokeCommand<void>("save_learning_config", { config }),
+  getDailyQueue: (limit?: number) => invokeCommand<DailyQueue>("get_daily_queue", { limit }),
+  getWordbookCatalog: () => invokeCommand<WordbookCatalogEntry[]>("get_wordbook_catalog"),
   getWordCatalog: () => invokeCommand<WordCard[]>("get_word_catalog"),
   getOverview: () => invokeCommand<Overview>("get_overview"),
   answerWord: (wordId: number, rating: number, durationMs: number) =>

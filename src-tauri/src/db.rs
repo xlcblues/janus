@@ -1246,18 +1246,21 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
                 next.due_at = i64::MAX;
                 mastered_now = true;
             } else {
-                let base = if next.repetitions == 1 {
-                    // 首次「认识」：按难度给较长基准（难度越低间隔越长），约 10 天 ~ 几十天量级。
+                let base = if next.repetitions == 1 && current.lapses == 0 {
+                    // 真正首次「认识」：全新单词第一次答对，按难度给较长基准（难度越低间隔越长），约 10 天 ~ 几十天量级。
                     ((14.0 / difficulty).round() as i64).max(7)
+                } else if next.repetitions == 1 {
+                    // 重来后重新答对：重新建立记忆，第二天再复习（固定 1 天）。
+                    1
                 } else {
                     // 后续复习：以当前间隔 × ease 推进（当前间隔已含难度，不再重复除以难度）。
                     ((current.interval_days as f64) * current.ease).round().max(1.0) as i64
                 };
-                let interval = if next.repetitions == 1 {
-                    // 首次「认识」：难度基准 + ±10% 随机划分。
+                let interval = if next.repetitions == 1 && current.lapses == 0 {
+                    // 真正首次「认识」：难度基准 + ±10% 随机划分。
                     jitter_interval(base, word_id, now, true)
                 } else {
-                    // 常规推进：间隔 > 5 天时 ±20% 随机，避免复习扎堆。
+                    // 常规推进：间隔 > 5 天时 ±20% 随机（重来后 1 天固定，不加扰动）。
                     jitter_interval(base, word_id, now, false)
                 };
                 next.interval_days = interval.max(1).min(100);
@@ -4118,6 +4121,35 @@ mod tests {
         assert!(second.interval_days > first.interval_days);
         assert!((30..=75).contains(&second.interval_days));
         assert_eq!(second.stage, "learning");
+    }
+
+    #[test]
+    fn rating1_then_known_reviews_next_day() {
+        let mut conn = test_conn();
+        // 新词「重来」：彻底忘记，10 分钟后当次重学，repetitions 归零。
+        let reset = answer_word(&mut conn, 21, 1, 3000).unwrap();
+        let after_reset: (i64, i64) = conn
+            .query_row(
+                "SELECT repetitions, lapses FROM word_states WHERE word_id = 21",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after_reset.0, 0);
+        assert_eq!(after_reset.1, 1);
+        // 重来后再「认识」：不是首次认识，第二天再复习（固定 1 天），而非长间隔。
+        let known = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(known.interval_days, 1);
+        let after_known: (i64, i64) = conn
+            .query_row(
+                "SELECT repetitions, lapses FROM word_states WHERE word_id = 21",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(after_known.0, 1);
+        assert_eq!(after_known.1, 1);
+        assert_eq!(known.stage, "learning");
     }
 
     #[test]

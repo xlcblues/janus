@@ -3355,12 +3355,22 @@ mod tests {
         let sentences: i64 = conn
             .query_row("SELECT COUNT(*) FROM sentences", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(words, 159);
+        let expected_unique = {
+            let mut set = std::collections::HashSet::new();
+            for book in SEED_BOOKS {
+                for seed in book.words {
+                    set.insert(seed.word);
+                }
+            }
+            set.len() as i64
+        };
+        // M1 遗留 20 词中仅 fluent 不在种子词表，因此 words 总数 = 词表去重 + 1。
+        assert_eq!(words, expected_unique + 1);
         assert_eq!(sentences, 20);
         let due: i64 = conn
             .query_row("SELECT COUNT(*) FROM word_states WHERE due_at <= ?1", [now_secs()], |row| row.get(0))
             .unwrap();
-        assert_eq!(due, 159);
+        assert_eq!(due, expected_unique + 1);
     }
 
     #[test]

@@ -1246,14 +1246,14 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
                 next.due_at = i64::MAX;
                 mastered_now = true;
             } else {
-                let base = if next.repetitions == 1 && current.lapses == 0 {
+                let base = if current.lapses > 0 {
+                    // 重来后重新开始：第 n 次「认识」→ n 天（1 → 2 → 3 → … → 100 封顶），每次重来再从 1 开始。
+                    next.repetitions
+                } else if next.repetitions == 1 {
                     // 真正首次「认识」：全新单词第一次答对，按难度给较长基准（难度越低间隔越长），约 10 天 ~ 几十天量级。
                     ((14.0 / difficulty).round() as i64).max(7)
-                } else if next.repetitions == 1 {
-                    // 重来后重新答对：重新建立记忆，第二天再复习（固定 1 天）。
-                    1
                 } else {
-                    // 后续复习：以当前间隔 × ease 推进（当前间隔已含难度，不再重复除以难度）。
+                    // 全新词后续：以当前间隔 × ease 推进（当前间隔已含难度，不再重复除以难度）。
                     ((current.interval_days as f64) * current.ease).round().max(1.0) as i64
                 };
                 let interval = if next.repetitions == 1 && current.lapses == 0 {
@@ -4150,6 +4150,26 @@ mod tests {
         assert_eq!(after_known.0, 1);
         assert_eq!(after_known.1, 1);
         assert_eq!(known.stage, "learning");
+    }
+
+    #[test]
+    fn relapsed_then_known_counts_from_one() {
+        let mut conn = test_conn();
+        // 重来：重新开始（repetitions 归零、lapses+1）。
+        answer_word(&mut conn, 21, 1, 3000).unwrap();
+        // 重来后第 1 次「认识」→ 1 天。
+        let k1 = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(k1.interval_days, 1);
+        // 第 2 次「认识」→ 2 天。
+        let k2 = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(k2.interval_days, 2);
+        // 第 3 次「认识」→ 3 天。
+        let k3 = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(k3.interval_days, 3);
+        // 再次「重来」：从 1 天重新开始。
+        answer_word(&mut conn, 21, 1, 3000).unwrap();
+        let k1_again = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(k1_again.interval_days, 1);
     }
 
     #[test]

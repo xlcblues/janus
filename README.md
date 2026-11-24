@@ -6,7 +6,7 @@ Janus 是太阳系软件系列中的 Windows 桌面端语言学习应用。初�
 
 ## 当前阶段
 
-**M9：词书体系与自适应记忆算法已完成。**
+**M10：三档评分 + 熟词本与防扎堆复习已完成。**
 
 M1 已实现并验收：极简 Logo「双面之门（Janus Gate）」、Janus Iris + Trial Brass 主题 Token、Tauri 2 + React 19 + TypeScript + Vite 8 Windows 桌面壳、自定义标题栏与窗口交互、模块导航（`Ctrl+1` 至 `Ctrl+6`）与 `Ctrl+K` 搜索、1360×820 / 1040×700 响应式验收。
 
@@ -90,6 +90,14 @@ M9 新增并验收：
 - 学习配置持久化：词书勾选、选词模式、每日配额仅存本地（`app_settings`），重启保留；
 - 回归：Rust 60 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 
+M10 新增并验收：
+
+- 三档评分与熟词本：单词复习改为「重来 / 模糊 / 认识」三档（重来 10 分钟后当次重学，模糊隔几个单词再练，认识按计划推进），另设「熟悉」直接加入熟词本（记录掌握时间、`due_at` 置为永不，不再进入任何复习队列），生词本页新增「熟词」Tab，可一键移回复习队列；
+- 记忆状态自适应重学：重来彻底重置节奏（reps 归零、lapses+1、ease-0.20）；模糊结合历史记忆状态——曾遗忘 / ease 偏低 / 难度高时立刻重学，否则按当前间隔 × 0.8 做短间隔复习，避免一刀切；
+- 防扎堆复习（参考墨墨背单词）：到期复习不足配额时，从未来 7 天内将到期的复习中提前补足（削峰填谷）；到期复习超配额时今日新词自动减半（至少保留 20% 底线）；复习与新词交错排列、首卡必为复习，避免某天集体到期而当天没有新学；
+- 单词难度细化：内在难度由 3 档扩展为 9 档（0.6 / 0.8 / 0.9 / 1.0 / 1.1 / 1.2 / 1.25 / 1.4 / 1.5），92 个种子词按学段重标档位，简单词降档、学术/专业词升档；
+- 数据迁移：SQLite 迁移 v7 新增 `mastered_at` 列，旧数据自动升级保留；
+- 回归：Rust 65 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 ## 快速开始
 
 环境要求：
@@ -150,10 +158,10 @@ Janus/
   design/              # 设计规范、Token 与高保真预览
   docs/                # 开发流程、功能与技术方案
   src/                 # React UI、组件、页面与样式
-    lib/api.ts         # typed IPC 与统一错误模型（M2–M9）
+    lib/api.ts         # typed IPC 与统一错误模型（M2–M10）
     lib/recorder.ts    # 麦克风录音：16kHz mono PCM16 WAV，仅内存；设备枚举与选择（M4/M7）
-    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M9）
-    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M9）
+    pages/             # Words/Sentences/Listening/Speaking/Conversation/Notebook/Analytics/Settings 学习页（M2–M10）
+    styles/learning.css# 学习闭环样式（仅语义 Token，M2–M10）
   scripts/             # download-whisper-model.ps1 离线 ASR 模型下载（M4）
   src-tauri/           # Tauri/Rust 壳层、窗口命令与权限
     src/asr.rs         # 离线 whisper ASR 转写（M4）
@@ -161,7 +169,7 @@ Janus/
     src/reminder.rs    # 每日复习提醒调度：本地时间计算与通知触发（M7）
     src/update.rs       # 版本比较与 GitHub Releases 更新检查（M8）
     src/seed_words.rs   # 6 本内置词书种子数据：小学/初中/高中/大学/雅思/专业（M9）
-    src/db.rs          # SQLite 迁移、SRS/自适应记忆、听力/听写/朗读/对话、事件、计划/提醒/语音设备、词书与学习配置（M2–M9）
+    src/db.rs          # SQLite 迁移、SRS/自适应记忆、听力/听写/朗读/对话、事件、计划/提醒/语音设备、词书/学习配置/熟词本（M2–M10）
   dist/                # Vite 生产构建，可重新生成
 ```
 
@@ -180,14 +188,14 @@ Janus/
 ## 当前边界
 
 - 单词学习（6 本内置词书、随机/自定义选词、每日新词+复习配额、难度自适应 SRS、复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
-- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M10 规划；
+- AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M11 规划；
 - 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分或模拟 AI 数据；AI 密钥只存本地数据库，不进前端构建；
 - 版本与更新：更新检查基于 GitHub Releases（`xlcblues/janus`），需要联网；无新版、网络失败或平台不支持均有明确中文降级提示；
-- 发布产物：NSIS 安装程序已产出（当前用户安装、简体中文），尚未代码签名，干净机器安装/卸载/升级 E2E 与商店/官网发布留待 M10；
+- 发布产物：NSIS 安装程序已产出（当前用户安装、简体中文），尚未代码签名，干净机器安装/卸载/升级 E2E 与商店/官网发布留待 M11；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）。
 
-## 下一步：M10
+## 下一步：M11
 
 M10 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，以及 Windows 代码签名、干净机器安装/升级/回滚专项验证与发布检查清单。
 
@@ -200,5 +208,5 @@ M10 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、
 
 ## 验证状态
 
-截至 2026-11-23，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 60 项 + 前端 13 项）。
+截至 2026-11-24，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 65 项 + 前端 13 项）。
 

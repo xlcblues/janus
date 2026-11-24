@@ -6,9 +6,9 @@ import type { NavId } from "../data/navigation";
 
 const RATINGS = [
   { rating: 1, label: "重来", hint: "10 分钟后", tone: "danger" },
-  { rating: 2, label: "模糊", hint: "今天再练", tone: "warning" },
-  { rating: 3, label: "认识", hint: "明天再见", tone: "accent" },
-  { rating: 4, label: "熟练", hint: "拉长间隔", tone: "success" },
+  { rating: 2, label: "模糊", hint: "隔几个再练", tone: "warning" },
+  { rating: 3, label: "认识", hint: "按计划复习", tone: "accent" },
+  { rating: 4, label: "熟悉", hint: "加入熟词本", tone: "success" },
 ] as const;
 
 interface WordsPageProps {
@@ -24,6 +24,7 @@ function stageLabel(stage: string): string {
 }
 
 function nextReviewText(card: WordCard): string {
+  if (card.mastered_at) return "已加入熟词本";
   if (card.interval_days <= 0) return "今天内复习";
   return `${card.interval_days} 天后复习`;
 }
@@ -77,9 +78,26 @@ export function WordsPage({ onNotify }: WordsPageProps) {
     const durationMs = Date.now() - startedAt.current;
     try {
       const updated = await api.answerWord(current.id, rating, durationMs);
-      setFeedback(`已记录「${RATINGS[rating - 1].label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}，难度系数 ${updated.difficulty.toFixed(2)}`);
+      const label = RATINGS[rating - 1].label;
+      if (rating === 4) {
+        setFeedback(`已记录「${label}」→ 已加入熟词本，不再安排复习，难度系数 ${updated.difficulty.toFixed(2)}`);
+      } else if (rating <= 2) {
+        setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，隔几个单词后再见，难度系数 ${updated.difficulty.toFixed(2)}`);
+      } else {
+        setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}，难度系数 ${updated.difficulty.toFixed(2)}`);
+      }
       startedAt.current = Date.now();
-      if (cursor + 1 < queue.length) {
+      if (rating <= 2) {
+        // 重来 / 模糊：把当前卡片插回「隔几个单词」的位置，当次立刻重学。
+        const pos = Math.min(cursor + 3, queue.length - 1);
+        setQueue((items) => {
+          const rest = items.filter((item) => item.id !== current.id);
+          const insertAt = Math.min(pos, rest.length);
+          return [...rest.slice(0, insertAt), { ...updated }, ...rest.slice(insertAt)];
+        });
+        setCursor((index) => Math.min(index + 1, queue.length - 1));
+        setFlipped(false);
+      } else if (cursor + 1 < queue.length) {
         setCursor((index) => index + 1);
         setFlipped(false);
       } else {
@@ -124,7 +142,7 @@ export function WordsPage({ onNotify }: WordsPageProps) {
     <div className="learning-page">
       <section className="page-heading learning-heading">
         <div>
-          <p className="eyebrow">单词 · M2</p>
+          <p className="eyebrow">单词 · M10</p>
           <h1>单词复习</h1>
           <p>间隔重复、词义与语境。按真实记忆反馈推进，不伪造评分。</p>
         </div>

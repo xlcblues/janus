@@ -16,6 +16,7 @@ export interface WordCard {
   due_at: number;
   difficulty: number;
   in_vocabulary: boolean;
+  mastered_at: number | null;
 }
 
 export interface Overview {
@@ -55,6 +56,15 @@ export interface VocabularyEntry {
   phonetic: string;
   meaning: string;
   added_at: number;
+}
+
+export interface MasteredWord {
+  word_id: number;
+  word: string;
+  phonetic: string;
+  meaning: string;
+  difficulty: number;
+  mastered_at: number | null;
 }
 
 export interface ExportResult {
@@ -530,6 +540,8 @@ export const api = {
   getVocabulary: () => invokeCommand<VocabularyEntry[]>("get_vocabulary"),
   addToVocabulary: (wordId: number) => invokeCommand<void>("add_to_vocabulary", { wordId }),
   removeFromVocabulary: (wordId: number) => invokeCommand<void>("remove_from_vocabulary", { wordId }),
+  getMasteredWords: () => invokeCommand<MasteredWord[]>("get_mastered_words"),
+  unmasterWord: (wordId: number) => invokeCommand<void>("unmaster_word", { wordId }),
   getStats: () => invokeCommand<StudyStats>("get_stats"),
   exportData: () => invokeCommand<ExportResult>("export_data"),
   clearLearningData: () => invokeCommand<ClearResult>("clear_learning_data"),

@@ -4,12 +4,34 @@ import { api, PREVIEW_MESSAGE, toUserMessage } from "../lib/api";
 import type { DailyQueue, LearningConfig, Overview, WordCard, Wordbook } from "../lib/api";
 import type { NavId } from "../data/navigation";
 
-const RATINGS = [
-  { rating: 1, label: "重来", hint: "10 分钟后", tone: "danger" },
-  { rating: 2, label: "模糊", hint: "隔几个再练", tone: "warning" },
-  { rating: 3, label: "认识", hint: "按计划复习", tone: "accent" },
-  { rating: 4, label: "熟悉", hint: "加入熟词本", tone: "success" },
-] as const;
+type RatingOption = {
+  rating: 1 | 2 | 3 | 4;
+  label: string;
+  hint: string;
+  tone: "danger" | "warning" | "accent" | "success";
+};
+
+/** 评分按钮提示：由后端返回的 preview 字段给出预测复习间隔，前端不伪造。 */
+function ratingOptions(card: WordCard): RatingOption[] {
+  const fuzzyHint = card.preview.fuzzy_days > 0 ? `${card.preview.fuzzy_days} 天后复习` : "隔几个单词再见";
+  let knownHint: string;
+  if (card.preview.known_days === -1) {
+    knownHint = "完成后进入熟词本";
+  } else if (card.preview.known_days > 0) {
+    knownHint = `${card.preview.known_days} 天后复习`;
+  } else {
+    knownHint = "隔几个单词再见";
+  }
+  if (card.preview.known_needs_again) {
+    knownHint += "（还需再认识一次）";
+  }
+  return [
+    { rating: 1, label: "重来", hint: "10 分钟后", tone: "danger" },
+    { rating: 2, label: "模糊", hint: fuzzyHint, tone: "warning" },
+    { rating: 3, label: "认识", hint: knownHint, tone: "accent" },
+    { rating: 4, label: "熟悉", hint: "加入熟词本", tone: "success" },
+  ];
+}
 
 interface WordsPageProps {
   onNavigate: (id: NavId) => void;
@@ -78,13 +100,14 @@ export function WordsPage({ onNotify }: WordsPageProps) {
     const durationMs = Date.now() - startedAt.current;
     try {
       const updated = await api.answerWord(current.id, rating, durationMs);
-      const label = RATINGS[rating - 1].label;
+      const label = ratingOptions(current)[rating - 1].label;
       if (rating === 4) {
         setFeedback(`已记录「${label}」→ 已加入熟词本，不再安排复习，难度系数 ${updated.difficulty.toFixed(2)}`);
       } else if (rating <= 2) {
         setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，隔几个单词后再见，难度系数 ${updated.difficulty.toFixed(2)}`);
       } else {
-        setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}，难度系数 ${updated.difficulty.toFixed(2)}`);
+        const needsAgain = current.preview.known_needs_again ? "（还需再认识一次）" : "";
+        setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}${needsAgain}，难度系数 ${updated.difficulty.toFixed(2)}`);
       }
       startedAt.current = Date.now();
       if (rating <= 2) {
@@ -172,7 +195,7 @@ export function WordsPage({ onNotify }: WordsPageProps) {
               <span key={book.code} className="book-chip">{book.title}</span>
             ))}
           <span className="daily-plan-meta">
-            新词 {learningConfig.daily_new} · 复习 {learningConfig.daily_review} ·{" "}
+            每日学习 {learningConfig.daily_total} ·{" "}
             {learningConfig.selection_mode === "custom" ? "自定义选词" : "随机选词"}
           </span>
         </section>
@@ -239,7 +262,7 @@ export function WordsPage({ onNotify }: WordsPageProps) {
           {feedback ? <div className="feedback-line">{feedback}</div> : null}
 
           <section className="rating-grid" aria-label="复习评分">
-            {RATINGS.map((option) => (
+            {ratingOptions(current).map((option) => (
               <button
                 type="button"
                 key={option.rating}

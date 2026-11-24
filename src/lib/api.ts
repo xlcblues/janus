@@ -17,6 +17,15 @@ export interface WordCard {
   difficulty: number;
   in_vocabulary: boolean;
   mastered_at: number | null;
+  known_streak: number;
+  preview: ReviewPreview;
+}
+
+export interface ReviewPreview {
+  again_days: number;
+  fuzzy_days: number;
+  known_days: number;
+  known_needs_again: boolean;
 }
 
 export interface Overview {
@@ -366,8 +375,7 @@ export interface LearningConfig {
   book_codes: string[];
   selection_mode: string;
   custom_word_ids: number[];
-  daily_new: number;
-  daily_review: number;
+  daily_total: number;
 }
 
 export interface DailyQueue {
@@ -473,8 +481,7 @@ export const emptyLearningConfig: LearningConfig = {
   book_codes: ["senior", "college"],
   selection_mode: "random",
   custom_word_ids: [],
-  daily_new: 10,
-  daily_review: 20,
+  daily_total: 30,
 };
 
 export const emptyTodayProgress: TodayProgress = {

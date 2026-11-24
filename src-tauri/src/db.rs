@@ -272,6 +272,10 @@ const MIGRATION_7: &str = r#"
 ALTER TABLE word_states ADD COLUMN mastered_at INTEGER;
 "#;
 
+const MIGRATION_8: &str = r#"
+ALTER TABLE word_states ADD COLUMN known_streak INTEGER NOT NULL DEFAULT 0;
+"#;
+
 #[derive(Debug)]
 pub enum AppError {
     Sqlite(rusqlite::Error),
@@ -324,6 +328,18 @@ impl AppError {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReviewPreview {
+    /// 重来（评分 1）后的预测：始终为 0（10 分钟后当次重学）。
+    pub again_days: i64,
+    /// 模糊（评分 2）后的预测：0 = 隔几个单词再见；>0 = 几天后复习。
+    pub fuzzy_days: i64,
+    /// 认识（评分 3）后的预测：>0 = 几天后复习；-1 = 直接进入熟词本；0 = 隔几个单词再见。
+    pub known_days: i64,
+    /// 认识是否处于「恢复期第 1 次」：还需再认识一次才算真正记住。
+    pub known_needs_again: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct WordCard {
     pub id: i64,
     pub word: String,
@@ -337,6 +353,10 @@ pub struct WordCard {
     pub difficulty: f64,
     pub in_vocabulary: bool,
     pub mastered_at: Option<i64>,
+    /// 恢复期连续「认识」计数（0..=1，达到 2 后归零）。
+    pub known_streak: i64,
+    /// 当前状态下各档评分的复习间隔预测，用于学习页按钮提示。
+    pub preview: ReviewPreview,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -588,6 +608,7 @@ struct SrsState {
     difficulty: f64,
     introduced_at: Option<i64>,
     mastered_at: Option<i64>,
+    known_streak: i64,
 }
 
 pub fn now_secs() -> i64 {
@@ -648,6 +669,12 @@ fn migrate(conn: &mut Connection) -> SqliteResult<()> {
         let tx = conn.transaction()?;
         tx.execute_batch(MIGRATION_7)?;
         tx.execute_batch("PRAGMA user_version = 7;")?;
+        tx.commit()?;
+    }
+    if version < 8 {
+        let tx = conn.transaction()?;
+        tx.execute_batch(MIGRATION_8)?;
+        tx.execute_batch("PRAGMA user_version = 8;")?;
         tx.commit()?;
     }
     Ok(())
@@ -819,26 +846,45 @@ pub fn ensure_wordbook_seed(conn: &mut Connection) -> Result<(), AppError> {
 }
 
 fn word_card_from_row(row: &rusqlite::Row<'_>) -> SqliteResult<WordCard> {
+    let id: i64 = row.get(0)?;
+    let difficulty: f64 = row.get(9)?;
+    let known_streak: i64 = row.get(12)?;
+    let current = SrsState {
+        stage: row.get(6)?,
+        interval_days: row.get(7)?,
+        ease: row.get(13)?,
+        repetitions: row.get(14)?,
+        lapses: row.get(15)?,
+        due_at: row.get(8)?,
+        difficulty,
+        introduced_at: None,
+        mastered_at: row.get(10)?,
+        known_streak,
+    };
+    let preview = srs_preview_for(&current, id);
     Ok(WordCard {
-        id: row.get(0)?,
+        id,
         word: row.get(1)?,
         phonetic: row.get(2)?,
         meaning: row.get(3)?,
         example_en: row.get(4)?,
         example_zh: row.get(5)?,
-        stage: row.get(6)?,
-        interval_days: row.get(7)?,
-        due_at: row.get(8)?,
-        difficulty: row.get(9)?,
-        mastered_at: row.get(10)?,
+        stage: current.stage.clone(),
+        interval_days: current.interval_days,
+        due_at: current.due_at,
+        difficulty: current.difficulty,
+        mastered_at: current.mastered_at,
         in_vocabulary: row.get::<_, i64>(11)? != 0,
+        known_streak,
+        preview,
     })
 }
 
 const WORD_CARD_SELECT: &str = "
 SELECT w.id, w.word, w.phonetic, w.meaning, w.example_en, w.example_zh,
        s.stage, s.interval_days, s.due_at, s.difficulty, s.mastered_at,
-       EXISTS(SELECT 1 FROM vocabulary v WHERE v.word_id = w.id) AS in_vocabulary
+       EXISTS(SELECT 1 FROM vocabulary v WHERE v.word_id = w.id) AS in_vocabulary,
+       s.known_streak, s.ease, s.repetitions, s.lapses
 FROM words w
 JOIN word_states s ON s.word_id = w.id
 ";
@@ -936,16 +982,17 @@ pub fn get_daily_queue(conn: &Connection, limit: Option<i64>) -> Result<DailyQue
     let config = get_learning_config(conn)?;
     let now = now_secs();
     let today_start = now - (now % 86400);
-    let review_limit = config.daily_review.max(0).min(300) as usize;
-    let new_limit = config.daily_new.max(0).min(300) as usize;
-    let total_limit = limit
-        .unwrap_or((review_limit + new_limit) as i64)
-        .clamp(1, 500) as usize;
+    // 每日学习总量：先算当日到期复习数，总量减去复习数即为今日新学数（复习优先）。
+    let total_limit = config.daily_total.max(0).min(300) as usize;
+    let queue_limit = limit.unwrap_or(total_limit as i64).clamp(1, 500) as usize;
     let (scope, params) = scope_sql(conn)?;
     let due_count: i64 =
         scoped_count(conn, "s.due_at <= ?1 AND s.stage IN ('learning','reviewing')", &[&now])?;
 
-    // 1) 到期复习：先取已到期（含今天）的复习卡片。
+    // 1) 复习配额 = 今日到期复习数，封顶每日总量（到期超量时当天先消化，余量顺延）。
+    let review_limit = (due_count as usize).min(total_limit);
+
+    // 2) 到期复习：先取已到期（含今天）的复习卡片。
     let due_cards: Vec<WordCard> = if review_limit > 0 {
         let sql = format!(
             "{WORD_CARD_SELECT} WHERE s.due_at <= ? AND s.stage IN ('learning','reviewing') {scope}
@@ -963,34 +1010,31 @@ pub fn get_daily_queue(conn: &Connection, limit: Option<i64>) -> Result<DailyQue
         Vec::new()
     };
 
-    // 2) 削峰填谷：到期复习不足配额时，把未来 7 天内将到期的复习提前分散到今天，
-    //    避免某天集体到期导致复习扎堆。
+    // 3) 削峰填谷：到期复习不足时，把未来 7 天内将到期的复习提前少量分散到今天
+    //    （提前量不超过剩余额度的一半），避免某天集体到期导致复习扎堆，同时给新词留足空间。
     let mut review_cards = due_cards;
-    if review_limit > 0 && review_cards.len() < review_limit {
-        let remaining = review_limit - review_cards.len();
-        let window_end = now + 7 * 86400;
-        let sql = format!(
-            "{WORD_CARD_SELECT} WHERE s.due_at > ? AND s.due_at <= ? AND s.stage IN ('learning','reviewing') {scope}
-             ORDER BY s.due_at ASC, w.id ASC LIMIT ?"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let mut all: Vec<&dyn rusqlite::ToSql> = vec![&now, &window_end];
-        all.extend(bind_scope(&params));
-        let remaining_i64 = remaining as i64;
-        all.push(&remaining_i64);
-        let rows = stmt.query_map(all.as_slice(), word_card_from_row)?
-            .collect::<SqliteResult<Vec<_>>>()?;
-        review_cards.extend(rows);
+    if review_cards.len() < total_limit {
+        let remaining = total_limit - review_cards.len();
+        let preload_cap = remaining / 2;
+        if preload_cap > 0 {
+            let window_end = now + 7 * 86400;
+            let sql = format!(
+                "{WORD_CARD_SELECT} WHERE s.due_at > ? AND s.due_at <= ? AND s.stage IN ('learning','reviewing') {scope}
+                 ORDER BY s.due_at ASC, w.id ASC LIMIT ?"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut all: Vec<&dyn rusqlite::ToSql> = vec![&now, &window_end];
+            all.extend(bind_scope(&params));
+            let preload_cap_i64 = preload_cap as i64;
+            all.push(&preload_cap_i64);
+            let rows = stmt.query_map(all.as_slice(), word_card_from_row)?
+                .collect::<SqliteResult<Vec<_>>>()?;
+            review_cards.extend(rows);
+        }
     }
 
-    // 3) 动态新词量：今天到期复习超过复习配额时，新词减半（至少保留 20%），
-    //    保证先把积压的复习消化掉；未超压时保持原配额。
-    let mut new_quota = new_limit;
-    if due_count > review_limit as i64 {
-        let halved = ((new_limit as f64) * 0.5).round() as usize;
-        let floor = ((new_limit as f64) * 0.2).ceil() as usize;
-        new_quota = halved.max(floor);
-    }
+    // 4) 新学数量 = 每日总量 - 实际复习数（复习超过总量时新学为 0）。
+    let new_quota = total_limit.saturating_sub(review_cards.len());
 
     let new_cards: Vec<WordCard> = if new_quota > 0 {
         let sql = format!(
@@ -1008,12 +1052,12 @@ pub fn get_daily_queue(conn: &Connection, limit: Option<i64>) -> Result<DailyQue
         Vec::new()
     };
 
-    // 4) 交错队列：复习与新词交替排列，首卡必为复习，避免新词堆在前面。
-    let mut cards: Vec<WordCard> = Vec::with_capacity(total_limit);
+    // 5) 交错队列：复习与新词交替排列，首卡必为复习，避免新词堆在前面。
+    let mut cards: Vec<WordCard> = Vec::with_capacity(queue_limit);
     let mut review_idx = 0usize;
     let mut new_idx = 0usize;
     let mut review_turn = true;
-    while cards.len() < total_limit {
+    while cards.len() < queue_limit {
         if review_turn && review_idx < review_cards.len() {
             cards.push(review_cards[review_idx].clone());
             review_idx += 1;
@@ -1028,8 +1072,8 @@ pub fn get_daily_queue(conn: &Connection, limit: Option<i64>) -> Result<DailyQue
         }
         review_turn = !review_turn;
     }
-    let review_count = review_idx.min(total_limit);
-    let new_count = new_idx.min(total_limit.saturating_sub(review_count));
+    let review_count = review_idx.min(queue_limit);
+    let new_count = new_idx.min(queue_limit.saturating_sub(review_count));
 
     let total_done_today: i64 = conn.query_row(
         "SELECT COUNT(*) FROM study_events WHERE kind = 'word_review' AND created_at >= ?1",
@@ -1044,6 +1088,7 @@ pub fn get_daily_queue(conn: &Connection, limit: Option<i64>) -> Result<DailyQue
         total_done_today,
     })
 }
+
 
 /// 已选词书内全部单词（含难度与所属词书），用于自定义选词。
 /// 无论选词模式如何，都按已勾选词书返回，方便用户在自定义模式下勾选单词。
@@ -1154,7 +1199,7 @@ fn effective_interval(base: i64, difficulty: f64) -> i64 {
 /// 重来后重新开始的认识间隔基准序列（平方递增）：
 /// 第 n 次「认识」→ 1 + Σk²（1 → 2 → 6 → 15 → 31 → 56 → 92 → 141…），
 /// 由调用方封顶 100 天并叠加随机扰动。
-fn restart_interval(reps: i64) -> i64 {
+fn restart_interval_squared(reps: i64) -> i64 {
     if reps <= 1 {
         return 1;
     }
@@ -1193,6 +1238,30 @@ fn jitter_interval(base: i64, word_id: i64, now: i64, first_known: bool) -> i64 
     lo + (splitmix64(seed) % range) as i64
 }
 
+
+/// 当前记忆状态下，各档评分对应的复习间隔预测（用于学习页按钮下方提示）。
+/// - `again_days` 恒为 0：重来后 10 分钟当次重学；
+/// - `fuzzy_days` = 0 表示模糊后隔几个单词立刻重学，>0 为几天后复习；
+/// - `known_days` = -1 表示认识后直接进入熟词本，>0 为几天后复习，0 为隔几个单词再见；
+/// - `known_needs_again`：点击「认识」后是否处于恢复期第 1 次（还需再认识一次才算真记住）。
+fn srs_preview_for(current: &SrsState, word_id: i64) -> ReviewPreview {
+    let again = next_srs(current, 1, word_id);
+    let fuzzy = next_srs(current, 2, word_id);
+    let known = next_srs(current, 3, word_id);
+    ReviewPreview {
+        again_days: again.interval_days,
+        fuzzy_days: fuzzy.interval_days,
+        known_days: if known.stage == "mastered" {
+            -1
+        } else {
+            known.interval_days
+        },
+        known_needs_again: current.lapses > 0
+            && current.known_streak == 0
+            && current.repetitions <= 1,
+    }
+}
+
 fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
     let now = now_secs();
     let mut next = SrsState {
@@ -1205,6 +1274,7 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
         difficulty: current.difficulty,
         introduced_at: current.introduced_at,
         mastered_at: current.mastered_at,
+        known_streak: current.known_streak,
     };
     let difficulty = if current.difficulty > 0.0 {
         current.difficulty
@@ -1216,6 +1286,7 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
     match rating {
         1 => {
             // 重来：彻底忘记，从头再来，10 分钟后当次重学。
+            next.known_streak = 0;
             next.repetitions = 0;
             next.lapses += 1;
             next.ease = (current.ease - 0.20).max(1.30);
@@ -1224,7 +1295,8 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
             next.mastered_at = None;
         }
         2 => {
-            // 模糊：结合历史记忆情况决定立刻重学或短间隔复习。
+            // 模糊：结合历史记忆情况决定立刻重学或短间隔复习；会打断「认识确认」连续计数。
+            next.known_streak = 0;
             next.repetitions += 1;
             next.ease = (current.ease - 0.15).max(1.30);
             let shaky = current.lapses > 0 || current.ease <= 2.0 || current.difficulty >= 1.3;
@@ -1251,18 +1323,29 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
             next.repetitions += 1;
             if current.interval_days >= 100 {
                 // 已达封顶间隔仍认识：直接进入熟词本，不再安排下一次复习。
+                next.known_streak = 0;
                 next.stage = "mastered".to_string();
                 next.mastered_at = Some(now);
                 next.interval_days = 0;
                 next.due_at = i64::MAX;
                 mastered_now = true;
+            } else if current.lapses > 0 && current.known_streak == 0 && current.repetitions <= 1 {
+                // 重来后第一次「认识」：只算“确认”，1 天后复习，还需再认识一次才算真记住。
+                next.known_streak = 1;
+                next.repetitions = 1;
+                next.interval_days = 1;
+                next.due_at = now + 86400;
+                next.mastered_at = None;
             } else {
-                let base = if current.lapses > 0 {
-                    // 重来后重新开始：按平方递增序列自动规划（1 → 2 → 6 → 15 → 31 → 56 → 92 → 100 封顶），
-                    // 每次重来再从 1 天开始。
-                    restart_interval(next.repetitions)
+                next.known_streak = 0;
+                let base = if current.known_streak == 1 {
+                    // 恢复期第二次「认识」：确认完成，按平方序列推进（第 2 次 = 2 天）。
+                    restart_interval_squared(next.repetitions)
+                } else if current.lapses > 0 {
+                    // 重来后已确认完成的后续认识：继续按平方序列自动规划（1 → 2 → 6 → 15 → 31 → 56 → 92 → 100 封顶）。
+                    restart_interval_squared(next.repetitions)
                 } else if next.repetitions == 1 {
-                    // 真正首次「认识」：全新单词第一次答对，按难度给较长基准（难度越低间隔越长），约 10 天 ~ 几十天量级。
+                    // 真正首次「认识」：全新单词第一次答对，按难度给较长基准（难度越低间隔越长）。
                     ((14.0 / difficulty).round() as i64).max(7)
                 } else {
                     // 全新词后续：以当前间隔 × ease 推进（当前间隔已含难度，不再重复除以难度）。
@@ -1272,7 +1355,7 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
                     // 真正首次「认识」：难度基准 + ±10% 随机划分。
                     jitter_interval(base, word_id, now, true)
                 } else {
-                    // 常规推进：间隔 > 5 天时 ±20% 随机（重来后 1 天固定，不加扰动）。
+                    // 常规推进：间隔 > 5 天时 ±20% 随机（确认期 1 天固定、恢复期 2 天不加扰动）。
                     jitter_interval(base, word_id, now, false)
                 };
                 next.interval_days = interval.max(1).min(100);
@@ -1282,6 +1365,7 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
         }
         4 => {
             // 熟悉：加入熟词本，永不安排复习。
+            next.known_streak = 0;
             next.repetitions += 1;
             next.stage = "mastered".to_string();
             next.mastered_at = Some(now);
@@ -1307,6 +1391,7 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
     next
 }
 
+
 pub fn answer_word(
     conn: &mut Connection,
     word_id: i64,
@@ -1320,7 +1405,7 @@ pub fn answer_word(
     let tx = conn.transaction()?;
     let current: Option<SrsState> = tx
         .query_row(
-            "SELECT stage, interval_days, ease, repetitions, lapses, due_at, difficulty, introduced_at, mastered_at
+            "SELECT stage, interval_days, ease, repetitions, lapses, due_at, difficulty, introduced_at, mastered_at, known_streak
              FROM word_states WHERE word_id = ?1",
             [word_id],
             |row| {
@@ -1334,6 +1419,7 @@ pub fn answer_word(
                     difficulty: row.get(6)?,
                     introduced_at: row.get(7)?,
                     mastered_at: row.get(8)?,
+                    known_streak: row.get(9)?,
                 })
             },
         )
@@ -1346,7 +1432,8 @@ pub fn answer_word(
          SET stage = ?1, interval_days = ?2, ease = ?3, repetitions = ?4,
              lapses = ?5, due_at = ?6, last_reviewed_at = ?7,
              introduced_at = COALESCE(introduced_at, ?9),
-             mastered_at = ?10
+             mastered_at = ?10,
+             known_streak = ?11
          WHERE word_id = ?8",
         params![
             next.stage,
@@ -1358,7 +1445,8 @@ pub fn answer_word(
             now,
             word_id,
             now,
-            next.mastered_at
+            next.mastered_at,
+            next.known_streak
         ],
     )?;
     let result = if rating >= 3 { 1 } else { 0 };
@@ -2792,8 +2880,9 @@ pub struct LearningConfig {
     pub book_codes: Vec<String>,
     pub selection_mode: String,
     pub custom_word_ids: Vec<i64>,
-    pub daily_new: i64,
-    pub daily_review: i64,
+    /// 每日学习总量：先算当日到期复习数，总量减去复习数即为今日新学数。
+    #[serde(default)]
+    pub daily_total: i64,
 }
 
 impl Default for LearningConfig {
@@ -2803,8 +2892,7 @@ impl Default for LearningConfig {
             book_codes: vec!["senior".to_string(), "college".to_string()],
             selection_mode: "random".to_string(),
             custom_word_ids: Vec::new(),
-            daily_new: 10,
-            daily_review: 20,
+            daily_total: 30,
         }
     }
 }
@@ -2871,7 +2959,28 @@ pub fn save_reminder_settings(
 const LEARNING_CONFIG_KEY: &str = "learning_config";
 
 pub fn get_learning_config(conn: &Connection) -> Result<LearningConfig, AppError> {
-    read_setting(conn, LEARNING_CONFIG_KEY)
+    let raw: Option<String> = conn
+        .query_row(
+            "SELECT value FROM app_settings WHERE key = ?1",
+            [LEARNING_CONFIG_KEY],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match raw {
+        Some(json) => {
+            let value: serde_json::Value = serde_json::from_str(&json)?;
+            let mut config: LearningConfig = serde_json::from_value(value.clone())?;
+            // 兼容旧版配置：旧结构只有 daily_new + daily_review，合并为每日学习总量并写回新结构。
+            if value.get("daily_total").is_none() {
+                let old_new = value.get("daily_new").and_then(|v| v.as_i64()).unwrap_or(0);
+                let old_review = value.get("daily_review").and_then(|v| v.as_i64()).unwrap_or(0);
+                config.daily_total = (old_new + old_review).clamp(1, 300);
+                let _ = write_setting(conn, LEARNING_CONFIG_KEY, &config);
+            }
+            Ok(config)
+        }
+        None => Ok(LearningConfig::default()),
+    }
 }
 
 pub fn save_learning_config(conn: &Connection, config: &LearningConfig) -> Result<(), AppError> {
@@ -3818,15 +3927,13 @@ mod tests {
             book_codes: vec!["primary".to_string(), "ielts".to_string()],
             selection_mode: "random".to_string(),
             custom_word_ids: Vec::new(),
-            daily_new: 5,
-            daily_review: 15,
+            daily_total: 20,
         };
         save_learning_config(&mut conn, &config).unwrap();
         let loaded = get_learning_config(&conn).unwrap();
         assert_eq!(loaded.book_codes, config.book_codes);
         assert_eq!(loaded.selection_mode, "random");
-        assert_eq!(loaded.daily_new, 5);
-        assert_eq!(loaded.daily_review, 15);
+        assert_eq!(loaded.daily_total, 20);
         assert!(loaded.enabled);
     }
 
@@ -3838,8 +3945,7 @@ mod tests {
         assert!(config.book_codes.contains(&"senior".to_string()));
         assert!(config.book_codes.contains(&"college".to_string()));
         assert_eq!(config.selection_mode, "random");
-        assert_eq!(config.daily_new, 10);
-        assert_eq!(config.daily_review, 20);
+        assert_eq!(config.daily_total, 30);
     }
 
     #[test]
@@ -3957,8 +4063,7 @@ mod tests {
             book_codes: vec!["senior".to_string(), "college".to_string()],
             selection_mode: "random".to_string(),
             custom_word_ids: Vec::new(),
-            daily_new: 5,
-            daily_review: 10,
+            daily_total: 15,
         };
         save_learning_config(&mut conn, &config).unwrap();
 
@@ -3973,7 +4078,7 @@ mod tests {
         let queue = get_daily_queue(&conn, Some(15)).unwrap();
         assert!(!queue.cards.is_empty());
         assert_eq!(queue.cards[0].id, 1);
-        assert!(queue.new_count <= 5);
+        assert!(queue.new_count <= 14);
         assert!(queue.review_count >= 1);
         assert!(queue.cards.len() <= 15);
         assert!(queue.total_done_today >= 0);
@@ -4148,10 +4253,10 @@ mod tests {
     #[test]
     fn restart_interval_sequence_is_nonlinear() {
         // 第 n 次「认识」的基准序列：1, 2, 6, 15, 31, 56, 92, 141（调用方封顶 100）。
-        let seq: Vec<i64> = (1..=8).map(restart_interval).collect();
+        let seq: Vec<i64> = (1..=8).map(restart_interval_squared).collect();
         assert_eq!(seq, vec![1, 2, 6, 15, 31, 56, 92, 141]);
         // 第 8 次后超过 100，由调用方封顶。
-        assert!(restart_interval(8) > 100);
+        assert!(restart_interval_squared(8) > 100);
     }
 
     #[test]
@@ -4209,6 +4314,98 @@ mod tests {
     }
 
     #[test]
+    fn relapsed_known_twice_schedules_plan() {
+        let mut conn = test_conn();
+        // 重来：彻底忘记。
+        answer_word(&mut conn, 21, 1, 3000).unwrap();
+        // 恢复期预览：认识 = 1 天后，还需再认识一次。
+        assert!(get_word_card(&conn, 21).unwrap().unwrap().preview.known_needs_again);
+        // 第一次「认识」：只算确认，1 天后复习，还需再认识一次。
+        let first = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(first.interval_days, 1);
+        assert_eq!(first.known_streak, 1);
+        // 第二次「认识」：确认完成，按平方序列推进到 2 天。
+        let second = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(second.interval_days, 2);
+        assert_eq!(second.known_streak, 0);
+    }
+
+    #[test]
+    fn again_then_again_keeps_known_streak() {
+        let mut conn = test_conn();
+        // 连续两次「重来」：仍处于恢复起点，第一次「认识」依然是确认。
+        answer_word(&mut conn, 21, 1, 3000).unwrap();
+        answer_word(&mut conn, 21, 1, 3000).unwrap();
+        let first = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(first.interval_days, 1);
+        assert_eq!(first.known_streak, 1);
+        let second = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(second.interval_days, 2);
+        assert_eq!(second.known_streak, 0);
+    }
+
+    #[test]
+    fn preview_reflects_recovery_confirm() {
+        let mut conn = test_conn();
+        // 新词预览：认识后按难度给较长间隔，不是确认态。
+        let fresh = get_word_card(&conn, 21).unwrap().unwrap();
+        assert!(!fresh.preview.known_needs_again);
+        assert!(fresh.preview.known_days > 0);
+        // 重来后预览：认识 = 确认（1 天后，还需再认识一次）；模糊 = 隔几个单词；重来 = 10 分钟后。
+        answer_word(&mut conn, 21, 1, 3000).unwrap();
+        let relapsed = get_word_card(&conn, 21).unwrap().unwrap();
+        assert_eq!(relapsed.preview.again_days, 0);
+        assert_eq!(relapsed.preview.fuzzy_days, 0);
+        assert_eq!(relapsed.preview.known_days, 1);
+        assert!(relapsed.preview.known_needs_again);
+    }
+
+    #[test]
+    fn daily_queue_reviews_crowd_out_new_words() {
+        let mut conn = test_conn();
+        let config = LearningConfig {
+            enabled: true,
+            book_codes: vec!["senior".to_string(), "college".to_string()],
+            selection_mode: "random".to_string(),
+            custom_word_ids: Vec::new(),
+            daily_total: 5,
+        };
+        save_learning_config(&mut conn, &config).unwrap();
+        let now = now_secs();
+        // 今日到期复习超过每日总量：全部配额用于复习，新学为 0。
+        for id in 1..=8 {
+            conn.execute(
+                "UPDATE word_states SET stage = 'learning', interval_days = 1, due_at = ?1
+                 WHERE word_id = ?2",
+                params![now, id],
+            )
+            .unwrap();
+        }
+        let queue = get_daily_queue(&conn, Some(10)).unwrap();
+        assert_eq!(queue.review_count, 5);
+        assert_eq!(queue.new_count, 0);
+        assert_eq!(queue.cards.len(), 5);
+    }
+
+    #[test]
+    fn learning_config_legacy_migration() {
+        let conn = test_conn();
+        // 手动写入旧版结构（daily_new + daily_review），读取时应合并为每日学习总量并写回新结构。
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('learning_config', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [r#"{"enabled":true,"book_codes":["senior"],"selection_mode":"random","custom_word_ids":[],"daily_new":5,"daily_review":15}"#],
+        )
+        .unwrap();
+        let config = get_learning_config(&conn).unwrap();
+        assert_eq!(config.daily_total, 20);
+        assert_eq!(config.book_codes, vec!["senior".to_string()]);
+        // 迁移写回后再次读取仍是新结构。
+        let config2 = get_learning_config(&conn).unwrap();
+        assert_eq!(config2.daily_total, 20);
+    }
+
+    #[test]
     fn fuzzy_short_interval_when_shaky_history() {
         let mut conn = test_conn();
         // 先答错一次（重来），再「模糊」：历史不稳定 -> 隔几个单词立刻重学。
@@ -4229,8 +4426,7 @@ mod tests {
             book_codes: vec!["senior".to_string(), "college".to_string()],
             selection_mode: "random".to_string(),
             custom_word_ids: Vec::new(),
-            daily_new: 5,
-            daily_review: 10,
+            daily_total: 15,
         };
         save_learning_config(&mut conn, &config).unwrap();
         let now = now_secs();
@@ -4272,8 +4468,7 @@ mod tests {
             book_codes: vec!["senior".to_string(), "college".to_string()],
             selection_mode: "random".to_string(),
             custom_word_ids: Vec::new(),
-            daily_new: 2,
-            daily_review: 5,
+            daily_total: 7,
         };
         save_learning_config(&mut conn, &config).unwrap();
         let now = now_secs();

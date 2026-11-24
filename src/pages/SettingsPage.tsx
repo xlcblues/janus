@@ -284,7 +284,7 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
           </div>
           <div className="settings-panel-body">
             <p className="settings-hint">
-              选择词书并设定每日新词/复习配额；记忆算法会按单词难度与你的评分自动安排复习天数。
+              选择词书并设定每日学习总量；每天先按到期复习数分配，总量减去复习数即为今日新学数，记忆算法会按单词难度与你的评分自动安排复习天数。
             </p>
             <label className="settings-toggle">
               <input
@@ -355,26 +355,14 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
             ) : null}
             <div className="settings-fields">
               <div className="field">
-                <span>每日新词</span>
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={learningConfig.daily_new}
-                  onChange={(event) => updateLearning({ daily_new: Number(event.target.value) })}
-                  aria-label="每日新词数量"
-                />
-                <small>个</small>
-              </div>
-              <div className="field">
-                <span>每日复习</span>
+                <span>每日学习数量</span>
                 <input
                   type="number"
                   min={0}
                   max={300}
-                  value={learningConfig.daily_review}
-                  onChange={(event) => updateLearning({ daily_review: Number(event.target.value) })}
-                  aria-label="每日复习数量"
+                  value={learningConfig.daily_total}
+                  onChange={(event) => updateLearning({ daily_total: Number(event.target.value) })}
+                  aria-label="每日学习数量"
                 />
                 <small>个</small>
               </div>

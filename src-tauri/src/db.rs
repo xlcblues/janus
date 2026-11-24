@@ -1170,6 +1170,7 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
         1.0
     };
 
+    let mut mastered_now = false;
     match rating {
         1 => {
             // 重来：彻底忘记，从头再来，10 分钟后当次重学。
@@ -1203,16 +1204,25 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
             next.mastered_at = None;
         }
         3 => {
-            // 认识：按计划推进复习间隔。
+            // 认识：按计划推进复习间隔，封顶 100 天。
             next.repetitions += 1;
-            let base = match next.repetitions {
-                1 => 1,
-                2 => 4,
-                _ => ((current.interval_days as f64) * current.ease).round().max(1.0) as i64,
-            };
-            next.interval_days = effective_interval(base, difficulty).min(30);
-            next.due_at = now + next.interval_days * 86400;
-            next.mastered_at = None;
+            if current.interval_days >= 100 {
+                // 已达封顶间隔仍认识：直接进入熟词本，不再安排下一次复习。
+                next.stage = "mastered".to_string();
+                next.mastered_at = Some(now);
+                next.interval_days = 0;
+                next.due_at = i64::MAX;
+                mastered_now = true;
+            } else {
+                let base = match next.repetitions {
+                    1 => 1,
+                    2 => 4,
+                    _ => ((current.interval_days as f64) * current.ease).round().max(1.0) as i64,
+                };
+                next.interval_days = effective_interval(base, difficulty).min(100);
+                next.due_at = now + next.interval_days * 86400;
+                next.mastered_at = None;
+            }
         }
         4 => {
             // 熟悉：加入熟词本，永不安排复习。
@@ -1221,12 +1231,14 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
             next.mastered_at = Some(now);
             next.interval_days = 0;
             next.due_at = i64::MAX;
+            mastered_now = true;
             // 熟悉不调整 ease，保持既有节奏稳定。
         }
         _ => {}
     }
 
-    if rating != 4 {
+    if !mastered_now {
+        // 阶段推进：「熟悉」与封顶间隔后仍「认识」已进入熟词本，其余按节奏推进。
         if next.interval_days > 3 && next.repetitions >= 3 {
             next.stage = "reviewing".to_string();
         } else if next.repetitions > 0 {
@@ -3971,6 +3983,55 @@ mod tests {
         let again = answer_word(&mut conn, 1, 1, 3000).unwrap();
         assert_eq!(again.stage, "new");
         assert!(again.mastered_at.is_none());
+    }
+
+    #[test]
+    fn rating3_after_cap_interval_joins_mastered_book() {
+        let mut conn = test_conn();
+        let now = now_secs();
+        // 卡片已排到封顶间隔（100 天）并到期，本次仍答「认识」：直接进入熟词本。
+        conn.execute(
+            "UPDATE word_states SET stage = 'reviewing', interval_days = 100, due_at = ?1
+             WHERE word_id = 1",
+            params![now],
+        )
+        .unwrap();
+        let card = answer_word(&mut conn, 1, 3, 5000).unwrap();
+        assert_eq!(card.stage, "mastered");
+        assert!(card.mastered_at.is_some());
+        assert_eq!(card.interval_days, 0);
+        assert_eq!(card.due_at, i64::MAX);
+        // 不再出现在复习队列，进入熟词本。
+        let queue = get_review_queue(&conn, Some(100)).unwrap();
+        assert!(queue.iter().all(|c| c.id != 1));
+        assert_eq!(get_mastered_words(&conn).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn rating3_interval_caps_at_100_days() {
+        let mut conn = test_conn();
+        // 高难度词：基础间隔超过 100 天时封顶到 100。
+        conn.execute(
+            "UPDATE word_states SET stage = 'reviewing', interval_days = 80, ease = 2.8,
+                     repetitions = 3
+             WHERE word_id = 1",
+            [],
+        )
+        .unwrap();
+        let card = answer_word(&mut conn, 1, 3, 5000).unwrap();
+        assert_eq!(card.interval_days, 100);
+        assert_eq!(card.stage, "reviewing");
+        // 低难度短间隔词：正常推进，不受封顶影响。
+        conn.execute(
+            "UPDATE word_states SET stage = 'learning', interval_days = 2, ease = 1.5,
+                     repetitions = 1
+             WHERE word_id = 21",
+            [],
+        )
+        .unwrap();
+        let short = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert!(short.interval_days < 100);
+        assert_eq!(short.stage, "learning");
     }
 
     #[test]

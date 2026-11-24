@@ -92,12 +92,12 @@ M9 新增并验收：
 
 M10 新增并验收：
 
-- 三档评分与熟词本：单词复习改为「重来 / 模糊 / 认识」三档（重来 10 分钟后当次重学，模糊隔几个单词再练，认识按计划推进），另设「熟悉」直接加入熟词本（记录掌握时间、`due_at` 置为永不，不再进入任何复习队列），生词本页新增「熟词」Tab，可一键移回复习队列；
+- 三档评分与熟词本：单词复习改为「重来 / 模糊 / 认识」三档（重来 10 分钟后当次重学，模糊隔几个单词再练，认识按计划推进），另设「熟悉」直接加入熟词本（记录掌握时间、`due_at` 置为永不，不再进入任何复习队列），生词本页新增「熟词」Tab，可一键移回复习队列；复习间隔封顶 100 天，达到封顶间隔后仍答「认识」会自动进入熟词本，不再无限循环复习；
 - 记忆状态自适应重学：重来彻底重置节奏（reps 归零、lapses+1、ease-0.20）；模糊结合历史记忆状态——曾遗忘 / ease 偏低 / 难度高时立刻重学，否则按当前间隔 × 0.8 做短间隔复习，避免一刀切；
 - 防扎堆复习（参考墨墨背单词）：到期复习不足配额时，从未来 7 天内将到期的复习中提前补足（削峰填谷）；到期复习超配额时今日新词自动减半（至少保留 20% 底线）；复习与新词交错排列、首卡必为复习，避免某天集体到期而当天没有新学；
 - 单词难度细化：内在难度由 3 档扩展为 9 档（0.6 / 0.8 / 0.9 / 1.0 / 1.1 / 1.2 / 1.25 / 1.4 / 1.5），92 个种子词按学段重标档位，简单词降档、学术/专业词升档；
 - 数据迁移：SQLite 迁移 v7 新增 `mastered_at` 列，旧数据自动升级保留；
-- 回归：Rust 65 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
+- 回归：Rust 67 项单元/集成测试 + 前端 13 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 ## 快速开始
 
 环境要求：
@@ -208,5 +208,5 @@ M10 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、
 
 ## 验证状态
 
-截至 2026-11-24，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 65 项 + 前端 13 项）。
+截至 2026-11-24，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 67 项 + 前端 13 项）。
 

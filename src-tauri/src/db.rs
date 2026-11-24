@@ -1151,7 +1151,38 @@ fn effective_interval(base: i64, difficulty: f64) -> i64 {
     ((base as f64) / difficulty).round().max(1.0) as i64
 }
 
-fn next_srs(current: &SrsState, rating: i64) -> SrsState {
+/// SplitMix64 混合函数：由 (word_id, 当天) 派生确定性伪随机数，
+/// 让不同单词、不同天得到不同扰动，避免复习内容扎堆。
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+/// 给复习间隔加随机扰动（防扎堆）：
+/// - first_known（首次「认识」）：基准间隔 ±1 天；
+/// - 常规：仅当间隔 > 5 天时按 ±20% 扰动，否则原样返回。
+/// 种子 = (word_id, 当天)，同一张卡同一天内结果稳定、跨天变化。
+fn jitter_interval(base: i64, word_id: i64, now: i64, first_known: bool) -> i64 {
+    let span = if first_known {
+        1
+    } else if base > 5 {
+        ((base as f64) * 0.20).round().max(1.0) as i64
+    } else {
+        0
+    };
+    if span == 0 {
+        return base;
+    }
+    let lo = (base - span).max(1);
+    let hi = base + span;
+    let range = (hi - lo + 1) as u64;
+    let seed = (word_id as u64) ^ ((now / 86400) as u64).wrapping_shl(32);
+    lo + (splitmix64(seed) % range) as i64
+}
+
+fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
     let now = now_secs();
     let mut next = SrsState {
         stage: current.stage.clone(),
@@ -1198,7 +1229,8 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
                         .round()
                         .max(1.0) as i64
                 };
-                next.interval_days = effective_interval(base, difficulty);
+                // 短间隔同样受「>5 天加随机」与 100 天封顶约束。
+                next.interval_days = jitter_interval(effective_interval(base, difficulty), word_id, now, false).min(100);
                 next.due_at = now + next.interval_days * 86400;
             }
             next.mastered_at = None;
@@ -1215,11 +1247,19 @@ fn next_srs(current: &SrsState, rating: i64) -> SrsState {
                 mastered_now = true;
             } else {
                 let base = match next.repetitions {
-                    1 => 1,
+                    // 首次「认识」：按难度定基准（难度越低间隔越长）。
+                    1 => ((2.0 / difficulty).round() as i64).max(1),
                     2 => 4,
                     _ => ((current.interval_days as f64) * current.ease).round().max(1.0) as i64,
                 };
-                next.interval_days = effective_interval(base, difficulty).min(100);
+                let interval = if next.repetitions == 1 {
+                    // 首次「认识」：难度基准 + ±1 天随机划分。
+                    jitter_interval(base, word_id, now, true)
+                } else {
+                    // 常规推进：间隔 > 5 天时 ±20% 随机，避免复习扎堆。
+                    jitter_interval(effective_interval(base, difficulty), word_id, now, false)
+                };
+                next.interval_days = interval.max(1).min(100);
                 next.due_at = now + next.interval_days * 86400;
                 next.mastered_at = None;
             }
@@ -1284,7 +1324,7 @@ pub fn answer_word(
         .optional()?;
     let current = current.ok_or_else(|| AppError::NotFound("没有找到这个单词的复习状态。".to_string()))?;
 
-    let next = next_srs(&current, rating);
+    let next = next_srs(&current, rating, word_id);
     tx.execute(
         "UPDATE word_states
          SET stage = ?1, interval_days = ?2, ease = ?3, repetitions = ?4,
@@ -3311,7 +3351,8 @@ mod tests {
     fn answer_word_advances_state() {
         let mut conn = test_conn();
         let card = answer_word(&mut conn, 1, 3, 5000).unwrap();
-        assert_eq!(card.interval_days, 1);
+        // 首次「认识」按难度 + 随机划分（threshold 1.3 → 1..=3 天）。
+        assert!((1..=3).contains(&card.interval_days));
         assert_eq!(card.stage, "learning");
         let reviews: i64 = conn
             .query_row("SELECT COUNT(*) FROM study_events WHERE kind = 'word_review'", [], |row| row.get(0))
@@ -3926,9 +3967,9 @@ mod tests {
         assert_eq!(easy.interval_days, 1);
         assert!(easy.difficulty < 1.0);
 
-        // 「认识」首次：按计划推进，间隔 = max(round(1 / 难度), 1)。
+        // 「认识」首次：按难度定基准并加随机扰动（低难度词间隔更长）。
         let known = answer_word(&mut conn, 2, 3, 5000).unwrap();
-        assert_eq!(known.interval_days, 1);
+        assert!((1..=5).contains(&known.interval_days));
         assert_eq!(known.stage, "learning");
 
         // 「熟悉」：加入熟词本，永不安排复习。
@@ -4032,6 +4073,37 @@ mod tests {
         let short = answer_word(&mut conn, 21, 3, 5000).unwrap();
         assert!(short.interval_days < 100);
         assert_eq!(short.stage, "learning");
+    }
+
+    #[test]
+    fn long_intervals_get_jittered_to_avoid_bunching() {
+        let now = now_secs();
+        // 间隔 > 5 天：按 ±20% 扰动，不同单词落点不同（避免同日扎堆）。
+        let samples: Vec<i64> = (1..=40).map(|id| jitter_interval(10, id, now, false)).collect();
+        assert!(samples.iter().all(|&d| (8..=12).contains(&d)));
+        let mut unique = samples.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert!(unique.len() > 1);
+        // 间隔 <= 5 天：不加扰动。
+        assert_eq!(jitter_interval(5, 1, now, false), 5);
+        assert_eq!(jitter_interval(1, 1, now, false), 1);
+        // 首次「认识」：±1 天扰动。
+        let first: Vec<i64> = (1..=40).map(|id| jitter_interval(3, id, now, true)).collect();
+        assert!(first.iter().all(|&d| (2..=4).contains(&d)));
+    }
+
+    #[test]
+    fn first_known_interval_scales_with_difficulty() {
+        let mut conn = test_conn();
+        // 低难度词（apple 0.7）首次「认识」：基准更长（约 3 天 ± 1）。
+        let easy = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert!((2..=4).contains(&easy.interval_days));
+        assert_eq!(easy.stage, "learning");
+        // 高难度词（threshold 1.3）首次「认识」：基准更短（约 2 天 ± 1）。
+        let hard = answer_word(&mut conn, 1, 3, 5000).unwrap();
+        assert!((1..=3).contains(&hard.interval_days));
+        assert_eq!(hard.stage, "learning");
     }
 
     #[test]
@@ -4178,7 +4250,7 @@ fn file_backed_database_persists_across_reopen() {
 
     let conn = open(&db_path).unwrap();
     let card = get_word_card(&conn, 1).unwrap().expect("word 1 should exist");
-    assert_eq!(card.interval_days, 1);
+    assert!((1..=3).contains(&card.interval_days));
     assert_eq!(card.stage, "learning");
     assert_eq!(get_vocabulary(&conn).unwrap().len(), 1);
 

@@ -1151,6 +1151,17 @@ fn effective_interval(base: i64, difficulty: f64) -> i64 {
     ((base as f64) / difficulty).round().max(1.0) as i64
 }
 
+/// 重来后重新开始的认识间隔基准序列（平方递增）：
+/// 第 n 次「认识」→ 1 + Σk²（1 → 2 → 6 → 15 → 31 → 56 → 92 → 141…），
+/// 由调用方封顶 100 天并叠加随机扰动。
+fn restart_interval(reps: i64) -> i64 {
+    if reps <= 1 {
+        return 1;
+    }
+    let n = reps;
+    1 + (n - 1) * n * (2 * n - 1) / 6
+}
+
 /// SplitMix64 混合函数：由 (word_id, 当天) 派生确定性伪随机数，
 /// 让不同单词、不同天得到不同扰动，避免复习内容扎堆。
 fn splitmix64(mut x: u64) -> u64 {
@@ -1247,8 +1258,9 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
                 mastered_now = true;
             } else {
                 let base = if current.lapses > 0 {
-                    // 重来后重新开始：第 n 次「认识」→ n 天（1 → 2 → 3 → … → 100 封顶），每次重来再从 1 开始。
-                    next.repetitions
+                    // 重来后重新开始：按平方递增序列自动规划（1 → 2 → 6 → 15 → 31 → 56 → 92 → 100 封顶），
+                    // 每次重来再从 1 天开始。
+                    restart_interval(next.repetitions)
                 } else if next.repetitions == 1 {
                     // 真正首次「认识」：全新单词第一次答对，按难度给较长基准（难度越低间隔越长），约 10 天 ~ 几十天量级。
                     ((14.0 / difficulty).round() as i64).max(7)
@@ -4124,6 +4136,15 @@ mod tests {
     }
 
     #[test]
+    fn restart_interval_sequence_is_nonlinear() {
+        // 第 n 次「认识」的基准序列：1, 2, 6, 15, 31, 56, 92, 141（调用方封顶 100）。
+        let seq: Vec<i64> = (1..=8).map(restart_interval).collect();
+        assert_eq!(seq, vec![1, 2, 6, 15, 31, 56, 92, 141]);
+        // 第 8 次后超过 100，由调用方封顶。
+        assert!(restart_interval(8) > 100);
+    }
+
+    #[test]
     fn rating1_then_known_reviews_next_day() {
         let mut conn = test_conn();
         // 新词「重来」：彻底忘记，10 分钟后当次重学，repetitions 归零。
@@ -4157,15 +4178,20 @@ mod tests {
         let mut conn = test_conn();
         // 重来：重新开始（repetitions 归零、lapses+1）。
         answer_word(&mut conn, 21, 1, 3000).unwrap();
-        // 重来后第 1 次「认识」→ 1 天。
+        // 重来后第 1 次「认识」→ 1 天（≤5 天不加随机）。
         let k1 = answer_word(&mut conn, 21, 3, 5000).unwrap();
         assert_eq!(k1.interval_days, 1);
         // 第 2 次「认识」→ 2 天。
         let k2 = answer_word(&mut conn, 21, 3, 5000).unwrap();
         assert_eq!(k2.interval_days, 2);
-        // 第 3 次「认识」→ 3 天。
+        // 第 3 次「认识」→ 基准 6 天 ±20%（5..=7）。
         let k3 = answer_word(&mut conn, 21, 3, 5000).unwrap();
-        assert_eq!(k3.interval_days, 3);
+        assert!((5..=7).contains(&k3.interval_days));
+        assert!(k3.interval_days > k2.interval_days);
+        // 第 4 次「认识」→ 基准 15 天 ±20%（12..=18）。
+        let k4 = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert!((12..=18).contains(&k4.interval_days));
+        assert!(k4.interval_days > k3.interval_days);
         // 再次「重来」：从 1 天重新开始。
         answer_word(&mut conn, 21, 1, 3000).unwrap();
         let k1_again = answer_word(&mut conn, 21, 3, 5000).unwrap();

@@ -226,6 +226,11 @@ fn unmaster_word(state: tauri::State<'_, AppState>, word_id: i64) -> Result<(), 
 }
 
 #[tauri::command]
+fn delete_learning_records(state: tauri::State<'_, AppState>, word_id: i64) -> Result<(), String> {
+    with_db_write(state.inner(), |conn| db::delete_learning_records(conn, word_id))
+}
+
+#[tauri::command]
 fn get_audio_catalog(
     state: tauri::State<'_, AppState>,
 ) -> Result<Vec<db::AudioCatalogEntry>, String> {
@@ -789,6 +794,7 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             clear_learning_data,
             get_mastered_words,
             unmaster_word,
+            delete_learning_records,
             get_audio_catalog,
             get_listening_detail,
             record_dictation,

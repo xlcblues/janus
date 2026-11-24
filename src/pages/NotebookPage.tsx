@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { BookmarkCheck, NotebookPen, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { BookmarkCheck, Eraser, NotebookPen, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { api, toUserMessage } from "../lib/api";
 import type { MasteredWord, VocabularyEntry } from "../lib/api";
 
@@ -84,6 +84,21 @@ export function NotebookPage({ onNotify }: NotebookPageProps) {
     }
   };
 
+  const handleDeleteRecord = async (wordId: number, word: string) => {
+    if (!window.confirm(`确定删除「${word}」的学习记录吗？该词将重置为新词，并从生词本/熟词本中移除。`)) return;
+    setBusyId(wordId);
+    try {
+      await api.deleteLearningRecords(wordId);
+      setItems((current) => current.filter((item) => item.word_id !== wordId));
+      setMastered((current) => current.filter((item) => item.word_id !== wordId));
+      onNotify(`已删除「${word}」的学习记录。`);
+    } catch (error) {
+      setNotice(toUserMessage(error));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div className="learning-page">
       <section className="page-heading learning-heading">
@@ -142,8 +157,19 @@ export function NotebookPage({ onNotify }: NotebookPageProps) {
                   onClick={() => void handleRemove(entry.word_id)}
                   disabled={busyId === entry.word_id}
                   aria-label={`移除 ${entry.word}`}
+                  title="移出生词本"
                 >
                   <Trash2 size={15} />
+                </button>
+                <button
+                  type="button"
+                  className="icon-button"
+                  onClick={() => void handleDeleteRecord(entry.word_id, entry.word)}
+                  disabled={busyId === entry.word_id}
+                  aria-label={`删除 ${entry.word} 的学习记录`}
+                  title="删除学习记录"
+                >
+                  <Eraser size={15} />
                 </button>
               </article>
             ))}
@@ -182,6 +208,16 @@ export function NotebookPage({ onNotify }: NotebookPageProps) {
                 title="移回复习"
               >
                 <RotateCcw size={15} />
+              </button>
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => void handleDeleteRecord(entry.word_id, entry.word)}
+                disabled={busyId === entry.word_id}
+                aria-label={`删除 ${entry.word} 的学习记录`}
+                title="删除学习记录"
+              >
+                <Eraser size={15} />
               </button>
             </article>
           ))}

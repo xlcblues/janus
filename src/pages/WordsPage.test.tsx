@@ -36,6 +36,7 @@ vi.mock("../lib/api", () => ({
     getWordbooks: vi.fn(),
     getLearningConfig: vi.fn(),
     answerWord: vi.fn(),
+    deleteLearningRecords: vi.fn(),
   },
 }));
 
@@ -140,5 +141,29 @@ describe("WordsPage", () => {
     render(<WordsPage onNavigate={vi.fn()} onNotify={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: /模糊/ }));
     expect(await screen.findByText("alpha")).toBeInTheDocument();
+  });
+
+  it("deletes the current word's learning record after confirmation", async () => {
+    vi.mocked(api.getDailyQueue).mockResolvedValue(
+      queue([makeCard({ id: 1, word: "alpha" }), makeCard({ id: 2, word: "beta" })]),
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const notify = vi.fn();
+    render(<WordsPage onNavigate={vi.fn()} onNotify={notify} />);
+    fireEvent.click(await screen.findByRole("button", { name: /删除 alpha 的学习记录/ }));
+    expect(api.deleteLearningRecords).toHaveBeenCalledWith(1);
+    await waitFor(() => expect(notify).toHaveBeenCalledWith(expect.stringContaining("alpha")));
+    confirmSpy.mockRestore();
+  });
+
+  it("does not delete the learning record when confirmation is declined", async () => {
+    vi.mocked(api.getDailyQueue).mockResolvedValue(
+      queue([makeCard({ id: 1, word: "alpha" })]),
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    render(<WordsPage onNavigate={vi.fn()} onNotify={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: /删除 alpha 的学习记录/ }));
+    expect(api.deleteLearningRecords).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
   });
 });

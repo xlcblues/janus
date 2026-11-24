@@ -1625,6 +1625,49 @@ pub fn unmaster_word(conn: &Connection, word_id: i64) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 删除指定单词的学习记录：清空其复习事件、移出生词本/熟词本，
+/// 并把复习状态重置为未学习（新词）。单词本身保留在词库中。
+pub fn delete_learning_records(conn: &mut Connection, word_id: i64) -> Result<(), AppError> {
+    let now = now_secs();
+    let tx = conn.transaction()?;
+    let exists: Option<i64> = tx
+        .query_row("SELECT 1 FROM words WHERE id = ?1", [word_id], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    if exists.is_none() {
+        return Err(AppError::NotFound("没有找到这个单词。".to_string()));
+    }
+    // 难度恢复为词书基准（与 clear_learning_data 一致），保证“未学习”的初始状态。
+    let difficulty: f64 = tx.query_row(
+        "SELECT COALESCE(
+            (SELECT MIN(MAX(b.difficulty * w.difficulty, 0.5), 2.0)
+             FROM wordbook_words ww JOIN wordbooks b ON b.id = ww.wordbook_id
+             JOIN words w ON w.id = ww.word_id
+             WHERE ww.word_id = ?1 ORDER BY b.sort_order ASC LIMIT 1),
+            w.difficulty)
+         FROM words w WHERE w.id = ?1",
+        [word_id],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "DELETE FROM study_events WHERE kind = 'word_review' AND ref_id = ?1",
+        [word_id],
+    )?;
+    tx.execute("DELETE FROM vocabulary WHERE word_id = ?1", [word_id])?;
+    tx.execute(
+        "UPDATE word_states
+         SET stage = 'new', interval_days = 0, ease = 2.5, repetitions = 0,
+             lapses = 0, due_at = ?1, last_reviewed_at = NULL,
+             mastered_at = NULL, known_streak = 0, introduced_at = NULL,
+             difficulty = ?2
+         WHERE word_id = ?3",
+        params![now, difficulty, word_id],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
 pub fn get_stats(conn: &Connection) -> Result<StudyStats, AppError> {
     let now = now_secs();
     let today_start = now - (now % 86400);
@@ -4342,6 +4385,73 @@ mod tests {
         let second = answer_word(&mut conn, 21, 3, 5000).unwrap();
         assert_eq!(second.interval_days, 2);
         assert_eq!(second.known_streak, 0);
+    }
+
+    #[test]
+    fn delete_learning_records_resets_word() {
+        let mut conn = test_conn();
+        // 先学习该词并加入生词本，制造学习记录。
+        let card = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert_eq!(card.stage, "learning");
+        add_to_vocabulary(&conn, 21).unwrap();
+        let events_before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM study_events WHERE kind = 'word_review' AND ref_id = 21",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events_before, 1);
+
+        delete_learning_records(&mut conn, 21).unwrap();
+
+        // 复习事件清空、移出生词本。
+        let events_after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM study_events WHERE kind = 'word_review' AND ref_id = 21",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(events_after, 0);
+        let vocab_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM vocabulary WHERE word_id = 21",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(vocab_count, 0);
+        // 状态重置为未学习：新词、无间隔、无复习计数，可再次作为新词学习。
+        let reset = get_word_card(&conn, 21).unwrap().unwrap();
+        assert_eq!(reset.stage, "new");
+        assert_eq!(reset.interval_days, 0);
+        assert!(reset.due_at <= now_secs());
+        assert!(!reset.in_vocabulary);
+        assert!(reset.mastered_at.is_none());
+        assert_eq!(reset.known_streak, 0);
+        // 难度恢复为词书基准。
+        let base: f64 = conn
+            .query_row(
+                "SELECT COALESCE(
+                    (SELECT MIN(MAX(b.difficulty * w.difficulty, 0.5), 2.0)
+                     FROM wordbook_words ww JOIN wordbooks b ON b.id = ww.wordbook_id
+                     JOIN words w ON w.id = ww.word_id
+                     WHERE ww.word_id = 21 ORDER BY b.sort_order ASC LIMIT 1),
+                    w.difficulty)
+                 FROM words w WHERE w.id = 21",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!((reset.difficulty - base).abs() < 1e-9);
+    }
+
+    #[test]
+    fn delete_learning_records_unknown_word_errors() {
+        let mut conn = test_conn();
+        let err = delete_learning_records(&mut conn, 999999).unwrap_err();
+        assert!(matches!(err, AppError::NotFound(_)));
     }
 
     #[test]

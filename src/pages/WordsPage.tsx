@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Bookmark, BookmarkCheck, BookOpen, RotateCcw } from "lucide-react";
+import { Bookmark, BookmarkCheck, BookOpen, RotateCcw, Trash2 } from "lucide-react";
 import { api, PREVIEW_MESSAGE, toUserMessage } from "../lib/api";
 import type { DailyQueue, LearningConfig, Overview, WordCard, Wordbook } from "../lib/api";
 import type { NavId } from "../data/navigation";
@@ -165,6 +165,29 @@ export function WordsPage({ onNotify }: WordsPageProps) {
     }
   };
 
+  const handleDeleteRecord = async () => {
+    if (!current || busy) return;
+    const word = current.word;
+    if (!window.confirm(`确定删除「${word}」的学习记录吗？该词将重置为新词，复习历史与生词本记录会被清除。`)) return;
+    setBusy(true);
+    try {
+      await api.deleteLearningRecords(current.id);
+      onNotify(`已删除「${word}」的学习记录，该词已重置为新词。`);
+      setQueue((items) => items.filter((item) => item.id !== current.id));
+      setCursor((index) => Math.max(0, index - 1));
+      setFlipped(false);
+      try {
+        setOverview(await api.getOverview());
+      } catch {
+        /* 概览刷新失败不阻断删除流程 */
+      }
+    } catch (error) {
+      setNotice(toUserMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="learning-page">
       <section className="page-heading learning-heading">
@@ -259,6 +282,16 @@ export function WordsPage({ onNotify }: WordsPageProps) {
               >
                 {current.in_vocabulary ? <BookmarkCheck size={16} /> : <Bookmark size={16} />}
                 {current.in_vocabulary ? "已在生词本" : "加入生词本"}
+              </button>
+              <button
+                type="button"
+                className="icon-button record-delete"
+                onClick={() => void handleDeleteRecord()}
+                disabled={busy}
+                aria-label={`删除 ${current.word} 的学习记录`}
+                title="删除学习记录"
+              >
+                <Trash2 size={16} />
               </button>
             </div>
           </section>

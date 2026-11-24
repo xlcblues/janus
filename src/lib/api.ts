@@ -547,6 +547,7 @@ export const api = {
   getVocabulary: () => invokeCommand<VocabularyEntry[]>("get_vocabulary"),
   addToVocabulary: (wordId: number) => invokeCommand<void>("add_to_vocabulary", { wordId }),
   removeFromVocabulary: (wordId: number) => invokeCommand<void>("remove_from_vocabulary", { wordId }),
+  deleteLearningRecords: (wordId: number) => invokeCommand<void>("delete_learning_records", { wordId }),
   getMasteredWords: () => invokeCommand<MasteredWord[]>("get_mastered_words"),
   unmasterWord: (wordId: number) => invokeCommand<void>("unmaster_word", { wordId }),
   getStats: () => invokeCommand<StudyStats>("get_stats"),

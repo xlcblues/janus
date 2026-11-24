@@ -101,24 +101,28 @@ export function WordsPage({ onNotify }: WordsPageProps) {
     try {
       const updated = await api.answerWord(current.id, rating, durationMs);
       const label = ratingOptions(current)[rating - 1].label;
+      // 是否「隔几个单词」当次内重学：重来，或后端判定记忆不稳定的模糊（fuzzy_days === 0）。
+      const requeue = rating === 1 || (rating === 2 && current.preview.fuzzy_days === 0);
       if (rating === 4) {
         setFeedback(`已记录「${label}」→ 已加入熟词本，不再安排复习，难度系数 ${updated.difficulty.toFixed(2)}`);
-      } else if (rating <= 2) {
+      } else if (requeue) {
         setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，隔几个单词后再见，难度系数 ${updated.difficulty.toFixed(2)}`);
-      } else {
-        const needsAgain = current.preview.known_needs_again ? "（还需再认识一次）" : "";
-        setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}${needsAgain}，难度系数 ${updated.difficulty.toFixed(2)}`);
+      } else if (rating === 2) {
+        // 模糊但后端判定为短间隔复习（N 天后）：移出当前队列，按计划到期再复习。
+        setFeedback(`已记录「${label}」→ ${stageLabel(updated.stage)}，${nextReviewText(updated)}，难度系数 ${updated.difficulty.toFixed(2)}`);
       }
+      // 认识（rating === 3）：不显示已记录提示，按钮下方的 preview 已给出复习预测。
       startedAt.current = Date.now();
-      if (rating <= 2) {
-        // 重来 / 模糊：把当前卡片插回「隔几个单词」的位置，当次立刻重学。
+      if (requeue) {
+        // 重来 / 模糊(隔几个)：把当前卡片插回「隔几个单词」的位置，当次立刻重学。
         const pos = Math.min(cursor + 3, queue.length - 1);
         setQueue((items) => {
           const rest = items.filter((item) => item.id !== current.id);
           const insertAt = Math.min(pos, rest.length);
           return [...rest.slice(0, insertAt), { ...updated }, ...rest.slice(insertAt)];
         });
-        setCursor((index) => Math.min(index + 1, queue.length - 1));
+        // 插回后队列长度不变；若当前卡原本是最后一张，光标回退到前一张，避免它立刻再次出现。
+        setCursor((index) => Math.min(index, Math.max(0, queue.length - 2)));
         setFlipped(false);
       } else if (cursor + 1 < queue.length) {
         setCursor((index) => index + 1);

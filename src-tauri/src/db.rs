@@ -1161,12 +1161,12 @@ fn splitmix64(mut x: u64) -> u64 {
 }
 
 /// 给复习间隔加随机扰动（防扎堆）：
-/// - first_known（首次「认识」）：基准间隔 ±1 天；
+/// - first_known（首次「认识」）：基准间隔 ±10%；
 /// - 常规：仅当间隔 > 5 天时按 ±20% 扰动，否则原样返回。
 /// 种子 = (word_id, 当天)，同一张卡同一天内结果稳定、跨天变化。
 fn jitter_interval(base: i64, word_id: i64, now: i64, first_known: bool) -> i64 {
     let span = if first_known {
-        1
+        ((base as f64) * 0.10).round().max(1.0) as i64
     } else if base > 5 {
         ((base as f64) * 0.20).round().max(1.0) as i64
     } else {
@@ -1223,14 +1223,14 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
                 next.due_at = now + 900;
             } else {
                 let base = if next.repetitions == 1 {
+                    // 首次「模糊」：隔几个单词（1 天内复习）。
                     1
                 } else {
-                    ((current.interval_days as f64) * next.ease * 0.8)
-                        .round()
-                        .max(1.0) as i64
+                    // 模糊：以当前间隔 × 0.8 做短间隔复习（当前间隔已含难度）。
+                    ((current.interval_days as f64) * 0.8).round().max(1.0) as i64
                 };
                 // 短间隔同样受「>5 天加随机」与 100 天封顶约束。
-                next.interval_days = jitter_interval(effective_interval(base, difficulty), word_id, now, false).min(100);
+                next.interval_days = jitter_interval(base, word_id, now, false).min(100);
                 next.due_at = now + next.interval_days * 86400;
             }
             next.mastered_at = None;
@@ -1246,18 +1246,19 @@ fn next_srs(current: &SrsState, rating: i64, word_id: i64) -> SrsState {
                 next.due_at = i64::MAX;
                 mastered_now = true;
             } else {
-                let base = match next.repetitions {
-                    // 首次「认识」：按难度定基准（难度越低间隔越长）。
-                    1 => ((2.0 / difficulty).round() as i64).max(1),
-                    2 => 4,
-                    _ => ((current.interval_days as f64) * current.ease).round().max(1.0) as i64,
+                let base = if next.repetitions == 1 {
+                    // 首次「认识」：按难度给较长基准（难度越低间隔越长），约 10 天 ~ 几十天量级。
+                    ((14.0 / difficulty).round() as i64).max(7)
+                } else {
+                    // 后续复习：以当前间隔 × ease 推进（当前间隔已含难度，不再重复除以难度）。
+                    ((current.interval_days as f64) * current.ease).round().max(1.0) as i64
                 };
                 let interval = if next.repetitions == 1 {
-                    // 首次「认识」：难度基准 + ±1 天随机划分。
+                    // 首次「认识」：难度基准 + ±10% 随机划分。
                     jitter_interval(base, word_id, now, true)
                 } else {
                     // 常规推进：间隔 > 5 天时 ±20% 随机，避免复习扎堆。
-                    jitter_interval(effective_interval(base, difficulty), word_id, now, false)
+                    jitter_interval(base, word_id, now, false)
                 };
                 next.interval_days = interval.max(1).min(100);
                 next.due_at = now + next.interval_days * 86400;
@@ -3351,8 +3352,8 @@ mod tests {
     fn answer_word_advances_state() {
         let mut conn = test_conn();
         let card = answer_word(&mut conn, 1, 3, 5000).unwrap();
-        // 首次「认识」按难度 + 随机划分（threshold 1.3 → 1..=3 天）。
-        assert!((1..=3).contains(&card.interval_days));
+        // 首次「认识」按难度 + 随机划分（threshold 1.3 → 约 11 天 ±10%）。
+        assert!((8..=14).contains(&card.interval_days));
         assert_eq!(card.stage, "learning");
         let reviews: i64 = conn
             .query_row("SELECT COUNT(*) FROM study_events WHERE kind = 'word_review'", [], |row| row.get(0))
@@ -3967,9 +3968,9 @@ mod tests {
         assert_eq!(easy.interval_days, 1);
         assert!(easy.difficulty < 1.0);
 
-        // 「认识」首次：按难度定基准并加随机扰动（低难度词间隔更长）。
+        // 「认识」首次：按难度定较长基准并加随机扰动（word 2 难度 1.3 → 约 11 天）。
         let known = answer_word(&mut conn, 2, 3, 5000).unwrap();
-        assert!((1..=5).contains(&known.interval_days));
+        assert!((8..=14).contains(&known.interval_days));
         assert_eq!(known.stage, "learning");
 
         // 「熟悉」：加入熟词本，永不安排复习。
@@ -4096,14 +4097,27 @@ mod tests {
     #[test]
     fn first_known_interval_scales_with_difficulty() {
         let mut conn = test_conn();
-        // 低难度词（apple 0.7）首次「认识」：基准更长（约 3 天 ± 1）。
+        // 低难度词（apple 0.7）首次「认识」：间隔更长（约 20 天 ±10%）。
         let easy = answer_word(&mut conn, 21, 3, 5000).unwrap();
-        assert!((2..=4).contains(&easy.interval_days));
+        assert!((15..=25).contains(&easy.interval_days));
         assert_eq!(easy.stage, "learning");
-        // 高难度词（threshold 1.3）首次「认识」：基准更短（约 2 天 ± 1）。
+        // 高难度词（threshold 1.3）首次「认识」：间隔更短（约 11 天 ±10%）。
         let hard = answer_word(&mut conn, 1, 3, 5000).unwrap();
-        assert!((1..=3).contains(&hard.interval_days));
+        assert!((8..=14).contains(&hard.interval_days));
         assert_eq!(hard.stage, "learning");
+    }
+
+    #[test]
+    fn subsequent_reviews_scale_from_first_known_interval() {
+        let mut conn = test_conn();
+        // 首次「认识」：低难度词（apple 0.7）得到较长间隔（约 20 天 ±10%）。
+        let first = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert!((15..=25).contains(&first.interval_days));
+        // 第二次「认识」：以首次间隔 × ease（2.5）推进并加 ±20% 随机。
+        let second = answer_word(&mut conn, 21, 3, 5000).unwrap();
+        assert!(second.interval_days > first.interval_days);
+        assert!((30..=75).contains(&second.interval_days));
+        assert_eq!(second.stage, "learning");
     }
 
     #[test]
@@ -4250,7 +4264,7 @@ fn file_backed_database_persists_across_reopen() {
 
     let conn = open(&db_path).unwrap();
     let card = get_word_card(&conn, 1).unwrap().expect("word 1 should exist");
-    assert!((1..=3).contains(&card.interval_days));
+    assert!((8..=14).contains(&card.interval_days));
     assert_eq!(card.stage, "learning");
     assert_eq!(get_vocabulary(&conn).unwrap().len(), 1);
 

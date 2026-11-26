@@ -2818,7 +2818,7 @@ pub fn correction_to_json(correction: Option<&Correction>) -> String {
 
 /* ============================================================
  * M6 · 数据、复习与计划
- * 周趋势 / 掌握度 / 错题聚合 / 学习计划与提醒 / 今日进度
+ * 周趋势 / 掌握度 / 错题聚合 / 提醒与今日进度
  * ============================================================ */
 
 #[derive(Debug, Clone, Serialize)]
@@ -2876,31 +2876,6 @@ pub struct MistakeBook {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StudyPlan {
-    pub enabled: bool,
-    pub word_target: i64,
-    pub sentence_target: i64,
-    pub listening_target: i64,
-    pub speaking_target: i64,
-    pub conversation_target: i64,
-    pub duration_min_target: i64,
-}
-
-impl Default for StudyPlan {
-    fn default() -> Self {
-        StudyPlan {
-            enabled: true,
-            word_target: 10,
-            sentence_target: 5,
-            listening_target: 3,
-            speaking_target: 3,
-            conversation_target: 4,
-            duration_min_target: 18,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReminderSettings {
     pub enabled: bool,
     pub hour: i64,
@@ -2950,11 +2925,8 @@ pub struct TodayProgress {
     pub duration_min: i64,
     pub due_words: i64,
     pub streak_days: i64,
-    pub plan_percent: i64,
-    pub plan: StudyPlan,
 }
 
-const STUDY_PLAN_KEY: &str = "study_plan";
 const REMINDER_KEY: &str = "reminder";
 
 fn read_setting<T>(conn: &Connection, key: &str) -> Result<T, AppError>
@@ -2978,14 +2950,6 @@ fn write_setting<T: Serialize>(conn: &Connection, key: &str, value: &T) -> Resul
         params![key, json],
     )?;
     Ok(())
-}
-
-pub fn get_study_plan(conn: &Connection) -> Result<StudyPlan, AppError> {
-    read_setting(conn, STUDY_PLAN_KEY)
-}
-
-pub fn save_study_plan(conn: &Connection, plan: &StudyPlan) -> Result<(), AppError> {
-    write_setting(conn, STUDY_PLAN_KEY, plan)
 }
 
 pub fn get_reminder_settings(conn: &Connection) -> Result<ReminderSettings, AppError> {
@@ -3323,32 +3287,6 @@ pub fn get_today_progress(conn: &Connection) -> Result<TodayProgress, AppError> 
         |row| row.get(0),
     )?;
     let due_words: i64 = scoped_count(conn, "s.due_at <= ?1 AND s.stage <> 'mastered'", &[&now])?;
-    let plan = get_study_plan(conn)?;
-
-    let plan_percent = if plan.enabled {
-        let mut target_total = 0i64;
-        let mut filled_total = 0i64;
-        let mut push = |target: i64, actual: i64| {
-            if target > 0 {
-                target_total += target;
-                filled_total += actual.min(target);
-            }
-        };
-        push(plan.word_target, word_reviews);
-        push(plan.sentence_target, sentences);
-        push(plan.listening_target, dictations);
-        push(plan.speaking_target, speaking);
-        push(plan.conversation_target, conversation_turns);
-        push(plan.duration_min_target, duration_ms / 60000);
-        if target_total > 0 {
-            (filled_total * 100 / target_total).min(100)
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-
     let streak_days = compute_streak_days(conn, today_start);
 
     Ok(TodayProgress {
@@ -3360,8 +3298,6 @@ pub fn get_today_progress(conn: &Connection) -> Result<TodayProgress, AppError> 
         duration_min: duration_ms / 60000,
         due_words,
         streak_days,
-        plan_percent,
-        plan,
     })
 }
 
@@ -3751,21 +3687,8 @@ mod tests {
     }
 
     #[test]
-    fn study_plan_and_reminder_roundtrip() {
+    fn reminder_settings_roundtrip() {
         let conn = test_conn();
-        let plan = get_study_plan(&conn).unwrap();
-        assert!(plan.enabled);
-        assert_eq!(plan.word_target, 10);
-        assert_eq!(plan.duration_min_target, 18);
-
-        let mut updated = plan.clone();
-        updated.word_target = 20;
-        updated.duration_min_target = 30;
-        save_study_plan(&conn, &updated).unwrap();
-        let loaded = get_study_plan(&conn).unwrap();
-        assert_eq!(loaded.word_target, 20);
-        assert_eq!(loaded.duration_min_target, 30);
-
         let reminder = ReminderSettings {
             enabled: false,
             hour: 21,
@@ -3930,8 +3853,6 @@ mod tests {
         let before = get_today_progress(&conn).unwrap();
         assert_eq!(before.word_reviews, 0);
         assert_eq!(before.due_words, 54);
-        assert!(before.plan.enabled);
-        assert_eq!(before.plan_percent, 0);
 
         let now = now_secs();
         let today_start = now - (now % 86400);
@@ -3956,10 +3877,6 @@ mod tests {
         assert_eq!(after.dictations, 1);
         assert_eq!(after.duration_min, 15);
         assert_eq!(after.streak_days, 1);
-        // 单词 10/10、句子 0/5、听力 1/3、朗读 0/3、对话 0/4、时长 15/18
-        // 完成量 = 10+0+1+0+0+15 = 26，目标总量 = 10+5+3+3+4+18 = 43
-        // => 26 * 100 / 43 = 60（向下取整）。
-        assert_eq!(after.plan_percent, 60);
     }
 
     #[test]

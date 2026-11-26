@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
-import { Bell, CalendarCheck, CloudOff, Download, Library, Mic, Save } from "lucide-react";
+import { Bell, CloudOff, Download, Library, Mic, Save } from "lucide-react";
 import {
   api,
   emptyLearningConfig,
   emptyMicrophoneSettings,
   emptyReminderSettings,
-  emptyStudyPlan,
   toUserMessage,
 } from "../lib/api";
 import type {
   LearningConfig,
   MicrophoneSettings,
   ReminderSettings,
-  StudyPlan,
   UpdateCheck,
   Wordbook,
   WordbookCatalogEntry,
@@ -24,29 +22,7 @@ interface SettingsPageProps {
   onNotify: (message: string) => void;
 }
 
-type PlanNumberKey = Exclude<keyof StudyPlan, "enabled">;
-
-const PLAN_FIELDS: Array<{
-  key: PlanNumberKey;
-  label: string;
-  unit: string;
-  hint: string;
-}> = [
-  { key: "word_target", label: "单词", unit: "个", hint: "每天复习的单词数量" },
-  { key: "sentence_target", label: "句子", unit: "句", hint: "每天主动回忆的句子数量" },
-  { key: "listening_target", label: "听力", unit: "段", hint: "每天完成的精听片段数量" },
-  { key: "speaking_target", label: "朗读", unit: "次", hint: "每天完成的跟读练习次数" },
-  { key: "conversation_target", label: "AI 对话", unit: "轮", hint: "每天完成的对话轮次" },
-  { key: "duration_min_target", label: "时长", unit: "分钟", hint: "每天投入的学习总时长" },
-];
-
-function clampMinutes(value: number): number {
-  if (Number.isNaN(value)) return 0;
-  return Math.max(0, Math.min(480, Math.round(value)));
-}
-
 export function SettingsPage({ onNotify }: SettingsPageProps) {
-  const [plan, setPlan] = useState<StudyPlan>(emptyStudyPlan);
   const [reminder, setReminder] = useState<ReminderSettings>(emptyReminderSettings);
   const [mic, setMic] = useState<MicrophoneSettings>(emptyMicrophoneSettings);
   const [learningConfig, setLearningConfig] = useState<LearningConfig>(emptyLearningConfig);
@@ -66,15 +42,13 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextPlan, nextReminder, nextMic, nextLearning, nextBooks, nextCatalog] = await Promise.all([
-        api.getStudyPlan(),
+      const [nextReminder, nextMic, nextLearning, nextBooks, nextCatalog] = await Promise.all([
         api.getReminderSettings(),
         api.getMicrophoneSettings(),
         api.getLearningConfig(),
         api.getWordbooks(),
         api.getWordbookCatalog(),
       ]);
-      setPlan(nextPlan);
       setReminder(nextReminder);
       setMic(nextMic);
       setLearningConfig(nextLearning);
@@ -119,14 +93,6 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  const updatePlan = (key: PlanNumberKey, value: number) => {
-    setPlan((current) => ({ ...current, [key]: value }));
-  };
-
-  const togglePlan = (enabled: boolean) => {
-    setPlan((current) => ({ ...current, enabled }));
-  };
 
   const updateReminder = (patch: Partial<ReminderSettings>) => {
     setReminder((current) => ({ ...current, ...patch }));
@@ -205,13 +171,10 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
   const handleSave = async () => {
     setBusy(true);
     try {
-      const nextPlan = { ...plan, duration_min_target: clampMinutes(plan.duration_min_target) };
-      setPlan(nextPlan);
-      await api.saveStudyPlan(nextPlan);
       await api.saveReminderSettings(reminder);
       await api.saveMicrophoneSettings(mic);
       await api.saveLearningConfig(learningConfig);
-      onNotify("学习计划、词库、提醒与语音设备设置已保存。");
+      onNotify("词库、每日学习数量、提醒与语音设备设置已保存。");
     } catch (error) {
       setNotice(toUserMessage(error));
     } finally {
@@ -225,7 +188,7 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
         <div>
           <p className="eyebrow">设置 · M8</p>
           <h1>设置</h1>
-          <p>学习计划、复习提醒、语音设备与数据边界。所有设置仅保存在本地数据库。</p>
+          <p>每日学习数量、复习提醒、语音设备与数据边界。所有设置仅保存在本地数据库。</p>
         </div>
         <div className="learning-heading-actions">
           <button type="button" className="button-secondary" onClick={() => void refresh()} disabled={busy}>
@@ -240,46 +203,10 @@ export function SettingsPage({ onNotify }: SettingsPageProps) {
       {notice ? <div className="notice-bar">{notice}</div> : null}
 
       <div className="settings-grid">
-        <section className="panel settings-panel" aria-labelledby="plan-title">
-          <div className="panel-heading">
-            <CalendarCheck size={16} />
-            <b id="plan-title">学习计划</b>
-            <span>daily plan</span>
-          </div>
-          <div className="settings-panel-body">
-            <p className="settings-hint">设置每天的学习目标，今日页会按这些配额计算完成度。</p>
-            <label className="settings-toggle">
-              <input
-                type="checkbox"
-                checked={plan.enabled}
-                onChange={(event) => togglePlan(event.target.checked)}
-              />
-              <span>启用学习计划</span>
-            </label>
-            <div className="settings-fields">
-              {PLAN_FIELDS.map((field) => (
-                <div className="field" key={field.key}>
-                  <span>
-                    {field.label}（{field.hint}）
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={plan[field.key]}
-                    onChange={(event) => updatePlan(field.key, Number(event.target.value))}
-                    aria-label={`${field.label}目标`}
-                  />
-                  <small>{field.unit}</small>
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
         <section className="panel settings-panel" aria-labelledby="wordbook-title">
           <div className="panel-heading">
             <Library size={16} />
-            <b id="wordbook-title">词库与每日计划</b>
+            <b id="wordbook-title">词库与每日学习数量</b>
             <span>wordbook</span>
           </div>
           <div className="settings-panel-body">

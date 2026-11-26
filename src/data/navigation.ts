@@ -44,7 +44,7 @@ export const navItems: NavItem[] = [
   { id: "conversation", label: "AI 对话", group: "learning", icon: Sparkles, shortcut: "6", description: "实时语音、纠错反馈与场景对话。", stage: "M5" },
   { id: "notebook", label: "生词本", group: "resources", icon: NotebookPen, count: 24, description: "集中管理生词、错句与待复习内容。", stage: "M2" },
   { id: "analytics", label: "学习数据", group: "resources", icon: ChartNoAxesCombined, description: "学习时间、掌握度、错误趋势与会话记录。", stage: "M2" },
-  { id: "settings", label: "设置", group: "resources", icon: Settings, description: "主题、学习计划、语音设备与隐私设置。", stage: "M1" },
+  { id: "settings", label: "设置", group: "resources", icon: Settings, description: "主题、每日学习数量、语音设备与隐私设置。", stage: "M1" },
 ];
 
 export const learningNav = navItems.filter((item) => item.group === "learning");

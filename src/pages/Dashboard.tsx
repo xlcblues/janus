@@ -3,8 +3,8 @@ import { ArrowRight, BookOpen, Headphones, Mic, SlidersHorizontal, Sparkles } fr
 import type { LucideIcon } from "lucide-react";
 import { Waveform } from "../components/Waveform";
 import type { NavId } from "../data/navigation";
-import { api, emptyTodayProgress, toUserMessage } from "../lib/api";
-import type { DailyStat, TodayProgress } from "../lib/api";
+import { api, emptyLearningConfig, emptyTodayProgress, toUserMessage } from "../lib/api";
+import type { DailyStat, LearningConfig, TodayProgress } from "../lib/api";
 
 interface DashboardProps {
   onNavigate: (id: NavId) => void;
@@ -29,16 +29,16 @@ function weekdayLabel(dayStart: number): string {
   return labels[date.getDay()] ?? "";
 }
 
-function GoalRing({ progress }: { progress: TodayProgress }) {
-  const percent = progress.plan.enabled ? progress.plan_percent : 0;
+function GoalRing({ progress, dailyTotal }: { progress: TodayProgress; dailyTotal: number }) {
+  const percent = dailyTotal > 0 ? Math.min(100, Math.round((progress.word_reviews / dailyTotal) * 100)) : 0;
   return (
     <div className="goal">
-      <div className="goal-ring" role="img" aria-label={`今日目标完成 ${percent}%`}>
+      <div className="goal-ring" role="img" aria-label={`今日单词完成 ${percent}%`}>
         <b>{percent}%</b>
       </div>
       <div className="goal-copy">
-        <strong>今日目标</strong>
-        {progress.duration_min} / {progress.plan.duration_min_target} 分钟
+        <strong>今日单词进度</strong>
+        已复习 {progress.word_reviews} / {dailyTotal} 个
       </div>
     </div>
   );
@@ -95,6 +95,7 @@ function LearningChart({ stats, streak }: { stats: DailyStat[]; streak: number }
 
 export function Dashboard({ onNavigate, onNotify }: DashboardProps) {
   const [progress, setProgress] = useState<TodayProgress>(emptyTodayProgress);
+  const [learningConfig, setLearningConfig] = useState<LearningConfig>(emptyLearningConfig);
   const [stats, setStats] = useState<DailyStat[]>([]);
   const [reviewQueue, setReviewQueue] = useState<
     Array<{ word: string; meaning: string; interval: string; tone: string }>
@@ -104,12 +105,14 @@ export function Dashboard({ onNavigate, onNotify }: DashboardProps) {
 
   const refresh = useCallback(async () => {
     try {
-      const [today, weekly, overview] = await Promise.all([
+      const [today, weekly, overview, learning] = await Promise.all([
         api.getTodayProgress(),
         api.getWeeklyStats(7),
         api.getOverview(),
+        api.getLearningConfig(),
       ]);
       setProgress(today);
+      setLearningConfig(learning);
       setStats(weekly);
       setReviewQueue(
         overview.review_queue.slice(0, 5).map((card) => ({
@@ -131,56 +134,49 @@ export function Dashboard({ onNavigate, onNotify }: DashboardProps) {
     void refresh();
   }, [refresh]);
 
-  const plan = progress.plan;
-  const planEnabled = plan.enabled;
+  const dailyTotal = learningConfig.daily_total;
   const focusCards: FocusCard[] = [
     {
       id: "words",
       icon: BookOpen,
       title: "单词复习",
-      detail: planEnabled ? `今日目标 ${plan.word_target} 个 · 已复习 ${progress.word_reviews} 个` : "今日单词练习",
+      detail: dailyTotal > 0 ? `今日目标 ${dailyTotal} 个 · 已复习 ${progress.word_reviews} 个` : "今日单词练习",
       badge: progress.due_words > 0 ? "DUE" : "DONE",
       badgeTone: progress.due_words > 0 ? "due" : undefined,
       metric: String(progress.due_words),
       metricUnit: "due",
-      progress: plan.word_target > 0 ? Math.min(100, Math.round((progress.word_reviews / plan.word_target) * 100)) : 0,
+      progress: dailyTotal > 0 ? Math.min(100, Math.round((progress.word_reviews / dailyTotal) * 100)) : 0,
     },
     {
       id: "conversation",
       icon: Sparkles,
       title: "AI 对话",
-      detail: planEnabled ? `今日目标 ${plan.conversation_target} 轮 · 已完成 ${progress.conversation_turns} 轮` : "情景对话练习",
+      detail: `今日已完成 ${progress.conversation_turns} 轮`,
       badge: "LIVE",
       badgeTone: "live",
       metric: String(progress.conversation_turns),
       metricUnit: "turns",
-      progress: plan.conversation_target > 0
-        ? Math.min(100, Math.round((progress.conversation_turns / plan.conversation_target) * 100))
-        : 0,
+      progress: 0,
     },
     {
       id: "listening",
       icon: Headphones,
       title: "精听片段",
-      detail: planEnabled ? `今日目标 ${plan.listening_target} 段 · 已完成 ${progress.dictations} 段` : "今日精听练习",
+      detail: `今日已完成 ${progress.dictations} 段`,
       badge: "LISTEN",
       metric: String(progress.dictations),
       metricUnit: "clips",
-      progress: plan.listening_target > 0
-        ? Math.min(100, Math.round((progress.dictations / plan.listening_target) * 100))
-        : 0,
+      progress: 0,
     },
     {
       id: "speaking",
       icon: Mic,
       title: "口语校准",
-      detail: planEnabled ? `今日目标 ${plan.speaking_target} 次 · 已完成 ${progress.speaking} 次` : "今日朗读练习",
+      detail: `今日已完成 ${progress.speaking} 次`,
       badge: "DRILL",
       metric: String(progress.speaking),
       metricUnit: "reads",
-      progress: plan.speaking_target > 0
-        ? Math.min(100, Math.round((progress.speaking / plan.speaking_target) * 100))
-        : 0,
+      progress: 0,
     },
   ];
 
@@ -198,7 +194,7 @@ export function Dashboard({ onNavigate, onNotify }: DashboardProps) {
               : "今天的到期单词已清空，可以复习句子或精听一段材料。"}
           </p>
         </div>
-        <GoalRing progress={progress} />
+        <GoalRing progress={progress} dailyTotal={dailyTotal} />
       </section>
 
       {notice ? <div className="notice-bar">{notice}</div> : null}
@@ -208,19 +204,19 @@ export function Dashboard({ onNavigate, onNotify }: DashboardProps) {
           <div className="route-tag"><i aria-hidden="true" />今日路线</div>
           <h2 id="route-title">先复习，再开口，最后对话。</h2>
           <p>
-            {planEnabled
-              ? `目标：单词 ${plan.word_target} · 句子 ${plan.sentence_target} · 听力 ${plan.listening_target} · 朗读 ${plan.speaking_target} · 对话 ${plan.conversation_target} 轮 · ${plan.duration_min_target} 分钟。`
-              : "学习计划未启用，可自由安排今天的学习内容。"}
+            {dailyTotal > 0
+              ? `今日单词目标 ${dailyTotal} 个：先复习到期单词，剩余额度用于新学。`
+              : "今日无单词目标，可自由安排学习内容。"}
           </p>
           <div className="route-actions">
             <button type="button" className="button-primary" onClick={() => onNavigate("words")}>
               继续学习 <ArrowRight size={15} />
             </button>
             <button type="button" className="button-secondary" onClick={() => onNavigate("settings")}>
-              <SlidersHorizontal size={14} /> 调整今日计划
+              <SlidersHorizontal size={14} /> 调整每日数量
             </button>
             <span className="route-meta">
-              <i aria-hidden="true" />今日 {progress.duration_min} / {plan.duration_min_target} 分钟
+              <i aria-hidden="true" />今日 {progress.duration_min} 分钟
             </span>
           </div>
         </div>

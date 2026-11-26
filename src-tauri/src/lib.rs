@@ -633,16 +633,6 @@ fn get_mistake_book(state: tauri::State<'_, AppState>) -> Result<db::MistakeBook
 }
 
 #[tauri::command]
-fn get_study_plan(state: tauri::State<'_, AppState>) -> Result<db::StudyPlan, String> {
-    with_db_read(state.inner(), db::get_study_plan)
-}
-
-#[tauri::command]
-fn save_study_plan(state: tauri::State<'_, AppState>, plan: db::StudyPlan) -> Result<(), String> {
-    with_db_write(state.inner(), |conn| db::save_study_plan(conn, &plan))
-}
-
-#[tauri::command]
 fn get_reminder_settings(state: tauri::State<'_, AppState>) -> Result<db::ReminderSettings, String> {
     with_db_read(state.inner(), db::get_reminder_settings)
 }
@@ -819,8 +809,6 @@ fn app_builder() -> tauri::Builder<tauri::Wry> {
             get_weekly_stats,
             get_mastery_progress,
             get_mistake_book,
-            get_study_plan,
-            save_study_plan,
             get_reminder_settings,
             save_reminder_settings,
             get_microphone_settings,

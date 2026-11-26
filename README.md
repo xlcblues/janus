@@ -14,6 +14,14 @@ M13 新增并验收：
 - 前端接入：`api.deleteLearningRecords(wordId)` 新增 Tauri 命令 `delete_learning_records`，单词卡片删除按钮在确认后移除当前卡并刷新概览，生词/熟词列表删除后从两侧列表同时移除；
 - 回归：新增 `delete_learning_records_resets_word`、`delete_learning_records_unknown_word_errors` 与前端删除确认/取消用例，Rust 81 项单元/集成测试 + 前端 18 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 
+**M14：取消「学习计划」，统一以每日学习数量为准。**
+
+M14 变更并验收：
+
+- 移除学习计划：设置页删除「学习计划」面板（每日单词/句子/听力/朗读/对话/时长配额与启用开关），Dashboard 不再按计划配额计算完成度与今日路线，消除「学习计划」与「每日学习数量」两套单词配额的冲突；
+- 统一以每日学习数量为准：Dashboard 今日单词进度、单词复习卡与今日路线改为以「每日学习数量」为单词目标（复习优先、余量新学），句子/听力/朗读/对话模块只展示实际完成量；`TodayProgress` 移除 `plan`/`plan_percent`，`StudyPlan`、后端 `get_study_plan`/`save_study_plan` 与前端 `getStudyPlan`/`saveStudyPlan` 全部下线；
+- 回归：`study_plan_and_reminder_roundtrip` 收敛为 `reminder_settings_roundtrip`，`today_progress_ties_plan_to_events` 移除计划断言，Rust 单元/集成测试 + 前端 18 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
+
 M12 新增并验收：
 
 - 学习数量统一：设置页将「每日新词」+「每日复习」合并为「每日学习总量」；每天先计算当日到期复习数，总量减去复习数即为今日新学数（复习优先，到期超量时新学为 0），未来 7 天将到期的复习在配额允许时提前少量分散（削峰填谷，提前量不超过剩余额度一半，给新词留足空间）；旧配置自动迁移（`daily_new + daily_review → daily_total`）并写回；
@@ -210,7 +218,7 @@ Janus/
 
 ## 当前边界
 
-- 单词学习（6 本内置词书、随机/自定义选词、每日新词+复习配额、难度自适应 SRS、复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
+- 单词学习（6 本内置词书、随机/自定义选词、每日学习数量（复习优先、余量新学）、难度自适应 SRS、复习队列、评分、生词本）、句子（主动回忆、对/错事件）、听力（播放/变速/逐句循环/听写）、朗读（录音、离线 ASR、逐词反馈）与 AI 对话（场景对话、异步纠错、语音输入）已形成完整学习闭环；
 - AI 对话依赖用户自备 OpenAI 兼容服务（Base URL / API Key / 模型，仅存本地数据库），TTS、流式链路与发音评分（音素/韵律）为 M11 规划；
 - 听力音频为 Windows 离线 TTS 生成的种子语料，后续里程碑将支持用户导入真实音频；
 - 不包含静态伪造评分或模拟 AI 数据；AI 密钥只存本地数据库，不进前端构建；

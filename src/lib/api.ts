@@ -338,16 +338,6 @@ export interface MistakeBook {
   low_score_words: WeakWord[];
 }
 
-export interface StudyPlan {
-  enabled: boolean;
-  word_target: number;
-  sentence_target: number;
-  listening_target: number;
-  speaking_target: number;
-  conversation_target: number;
-  duration_min_target: number;
-}
-
 export interface ReminderSettings {
   enabled: boolean;
   hour: number;
@@ -414,8 +404,6 @@ export interface TodayProgress {
   duration_min: number;
   due_words: number;
   streak_days: number;
-  plan_percent: number;
-  plan: StudyPlan;
 }
 
 export const emptyConversationSettings: ConversationSettings = {
@@ -455,16 +443,6 @@ export const emptyStats: StudyStats = {
 };
 
 
-export const emptyStudyPlan: StudyPlan = {
-  enabled: true,
-  word_target: 10,
-  sentence_target: 5,
-  listening_target: 3,
-  speaking_target: 3,
-  conversation_target: 4,
-  duration_min_target: 18,
-};
-
 export const emptyReminderSettings: ReminderSettings = {
   enabled: true,
   hour: 20,
@@ -493,8 +471,6 @@ export const emptyTodayProgress: TodayProgress = {
   duration_min: 0,
   due_words: 0,
   streak_days: 0,
-  plan_percent: 0,
-  plan: emptyStudyPlan,
 };
 
 export const emptyMasteryProgress: MasteryProgress = {
@@ -592,8 +568,6 @@ export const api = {
   getWeeklyStats: (days?: number) => invokeCommand<DailyStat[]>("get_weekly_stats", { days }),
   getMasteryProgress: () => invokeCommand<MasteryProgress>("get_mastery_progress"),
   getMistakeBook: () => invokeCommand<MistakeBook>("get_mistake_book"),
-  getStudyPlan: () => invokeCommand<StudyPlan>("get_study_plan"),
-  saveStudyPlan: (plan: StudyPlan) => invokeCommand<void>("save_study_plan", { plan }),
   getReminderSettings: () => invokeCommand<ReminderSettings>("get_reminder_settings"),
   saveReminderSettings: (settings: ReminderSettings) =>
     invokeCommand<void>("save_reminder_settings", { settings }),

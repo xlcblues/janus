@@ -3782,7 +3782,7 @@ mod tests {
         let progress = get_mastery_progress(&conn).unwrap();
         assert_eq!(progress.learned_words, 1);
         assert_eq!(progress.vocabulary_count, 1);
-        // 范围词量变大后，1/3550 的掌握度按整数除法为 0。
+        // 范围词量变大后，1/7616 的掌握度按整数除法为 0。
         assert_eq!(progress.mastery_percent, 0);
         let learning = progress
             .word_stages
@@ -3795,7 +3795,7 @@ mod tests {
             .iter()
             .find(|item| item.stage == "new")
             .expect("new stage should exist");
-        assert_eq!(new.count, 3549);
+        assert_eq!(new.count, 7615);
         assert!(progress
             .sentence_statuses
             .iter()
@@ -3853,7 +3853,7 @@ mod tests {
         ensure_seed_listening_clips(&mut conn).unwrap();
         let before = get_today_progress(&conn).unwrap();
         assert_eq!(before.word_reviews, 0);
-        assert_eq!(before.due_words, 3550);
+        assert_eq!(before.due_words, 7616);
 
         let now = now_secs();
         let today_start = now - (now % 86400);
@@ -3920,7 +3920,7 @@ mod tests {
         assert!(codes.contains(&"professional"));
 
         let catalog = get_wordbook_catalog(&conn).unwrap();
-        assert_eq!(catalog.len(), 3550);
+        assert_eq!(catalog.len(), 7616);
         for entry in &catalog {
             assert!(!entry.book_codes.is_empty());
         }
@@ -4106,7 +4106,7 @@ mod tests {
         let queue = get_review_queue(&conn, Some(100)).unwrap();
         assert!(queue.iter().all(|c| c.id != 1));
         let stats = get_stats(&conn).unwrap();
-        assert_eq!(stats.due_words, 3549);
+        assert_eq!(stats.due_words, 7615);
         assert_eq!(stats.mastered_words, 1);
         // 熟词本可查询到该词。
         let mastered = get_mastered_words(&conn).unwrap();
@@ -4601,9 +4601,9 @@ fn export_and_clear_learning_data() {
     let stats = get_stats(&conn).unwrap();
     assert_eq!(stats.total_reviews, 0);
     assert_eq!(stats.vocabulary_count, 0);
-    assert_eq!(stats.due_words, 3550);
+    assert_eq!(stats.due_words, 7616);
     let overview = get_overview(&conn).unwrap();
     assert_eq!(overview.learned_words, 0);
 
     let _ = std::fs::remove_dir_all(&dir);
-}
+}

@@ -3782,7 +3782,8 @@ mod tests {
         let progress = get_mastery_progress(&conn).unwrap();
         assert_eq!(progress.learned_words, 1);
         assert_eq!(progress.vocabulary_count, 1);
-        assert_eq!(progress.mastery_percent, 1);
+        // 范围词量变大后，1/3550 的掌握度按整数除法为 0。
+        assert_eq!(progress.mastery_percent, 0);
         let learning = progress
             .word_stages
             .iter()
@@ -3794,7 +3795,7 @@ mod tests {
             .iter()
             .find(|item| item.stage == "new")
             .expect("new stage should exist");
-        assert_eq!(new.count, 53);
+        assert_eq!(new.count, 3549);
         assert!(progress
             .sentence_statuses
             .iter()
@@ -3852,7 +3853,7 @@ mod tests {
         ensure_seed_listening_clips(&mut conn).unwrap();
         let before = get_today_progress(&conn).unwrap();
         assert_eq!(before.word_reviews, 0);
-        assert_eq!(before.due_words, 54);
+        assert_eq!(before.due_words, 3550);
 
         let now = now_secs();
         let today_start = now - (now % 86400);
@@ -3919,7 +3920,7 @@ mod tests {
         assert!(codes.contains(&"professional"));
 
         let catalog = get_wordbook_catalog(&conn).unwrap();
-        assert_eq!(catalog.len(), 54);
+        assert_eq!(catalog.len(), 3550);
         for entry in &catalog {
             assert!(!entry.book_codes.is_empty());
         }
@@ -3985,7 +3986,7 @@ mod tests {
     fn scope_filters_review_queue() {
         let conn = test_conn();
         let queue = get_review_queue(&conn, Some(100)).unwrap();
-        assert_eq!(queue.len(), 54);
+        assert_eq!(queue.len(), 100);
         for card in &queue {
             let codes: Option<String> = conn
                 .query_row(
@@ -4105,7 +4106,7 @@ mod tests {
         let queue = get_review_queue(&conn, Some(100)).unwrap();
         assert!(queue.iter().all(|c| c.id != 1));
         let stats = get_stats(&conn).unwrap();
-        assert_eq!(stats.due_words, 53);
+        assert_eq!(stats.due_words, 3549);
         assert_eq!(stats.mastered_words, 1);
         // 熟词本可查询到该词。
         let mastered = get_mastered_words(&conn).unwrap();
@@ -4530,9 +4531,8 @@ mod tests {
         let card = get_word_card(&conn, 1).unwrap().unwrap();
         assert_eq!(card.stage, "learning");
         assert!(card.mastered_at.is_none());
-        // 移回复习后立即可复习。
-        let queue = get_review_queue(&conn, Some(100)).unwrap();
-        assert!(queue.iter().any(|c| c.id == 1));
+        // 移回复习后立即可复习（复习队列容量有限，直接校验到期时间）。
+        assert!(card.due_at <= now_secs());
         // 重复移除报错。
         assert!(unmaster_word(&conn, 1).is_err());
     }
@@ -4601,7 +4601,7 @@ fn export_and_clear_learning_data() {
     let stats = get_stats(&conn).unwrap();
     assert_eq!(stats.total_reviews, 0);
     assert_eq!(stats.vocabulary_count, 0);
-    assert_eq!(stats.due_words, 54);
+    assert_eq!(stats.due_words, 3550);
     let overview = get_overview(&conn).unwrap();
     assert_eq!(overview.learned_words, 0);
 

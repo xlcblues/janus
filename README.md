@@ -26,6 +26,16 @@ M16 新增并验收：
 - 词条总量：6 本词书共 2108 词条、2024 个唯一种子词（含 M1 遗留词 fluent 共 2025 个可学单词），全库去重校验通过；
 - 回归：`migration_seeds_expected_content` 等动态计数断言自动适配新总量，Rust 81 项单元/集成测试 + 前端 18 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
 
+**M17：高中词库扩充至 3500 词。**
+
+M17 新增并验收：
+
+- 高中词库大规模扩充：高中词书由 28 词扩充至 3528 词，新增 3500 词，按主题分 32 组（学校与学习 / 考试与学习品质 / 家庭与亲情 / 人际与社交 / 职业与身份 / 情绪感受·积极 / 情绪感受·消极 / 品格与道德 / 身体与器官 / 健康与疾病 / 食物与饮品 / 地点与建筑 / 城市与乡村·人口 / 交通与旅行 / 自然与环境（天气气候） / 生态与环境 / 动物 / 时间与时代 / 动作动词（日常与身体） / 动作动词（学习与思考） / 动作动词（交际与社会） / 形容词与描述（一） / 形容词与描述（二） / 社会与法律·工作与经济 / 科技与通信 / 文化艺术·历史文学音乐 / 体育与健康生活 / 家居与物品 / 抽象名词 / 副词与连接词 / 植物与自然地理 / 高频动词与行为补充），全部含音标、中文释义与中英双语例句；
+- 难度档位贴合高中学段：新增词以内在难度 1.0（w）为主、1.1（nw）稍难词为辅、0.9（sw）/ 0.8（lw）简单词少量点缀，与既有档位体系一致；
+- 幂等播种无需迁移：`seed_words.rs` 新增词通过 `INSERT OR IGNORE` + word 唯一约束自动入库，`word_count` 自动重算，旧数据与既有复习进度不受影响；与小学/初中及其他词书共享的常用词沿用既有跨词书共享机制，同词同进度；
+- 词条总量：6 本词书共 5608 词条、4524 个唯一种子词（含 M1 遗留词 fluent 共 4525 个可学单词），全库去重校验通过；
+- 回归：`migration_seeds_expected_content` 等动态计数断言自动适配新总量，Rust 81 项单元/集成测试 + 前端 18 项测试全绿，`pnpm typecheck`、`pnpm build`、`cargo test` 通过。
+
 **M13：删除学习记录已完成。**
 
 M13 新增并验收：
@@ -246,9 +256,9 @@ Janus/
 - 发布产物：NSIS 安装程序已产出（当前用户安装、简体中文），尚未代码签名，干净机器安装/卸载/升级 E2E 与商店/官网发布留待 M11；
 - 学习数据本地保存、可导出、可清除（清除前自动备份）、可删除单个单词的学习记录（重置为新词）。
 
-## 下一步：M17
+## 下一步：M18
 
-M17 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，以及 Windows 代码签名、干净机器安装/升级/回滚专项验证与发布检查清单。
+M18 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、发音评分（音素/韵律）、真实音频导入与云同步接口，以及 Windows 代码签名、干净机器安装/升级/回滚专项验证与发布检查清单。
 
 ## 设计边界
 
@@ -259,5 +269,5 @@ M17 聚焦实时链路与发布收尾：流式 ASR/LLM 与 TTS、语音打断、
 
 ## 验证状态
 
-截至 2026-11-24，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 73 项 + 前端 13 项）。
+截至 2026-11-27，`pnpm typecheck`、`pnpm test`、`pnpm build`、`cargo check --manifest-path src-tauri/Cargo.toml`、`cargo check --examples --manifest-path src-tauri/Cargo.toml` 与 `cargo test --manifest-path src-tauri/Cargo.toml` 均通过（Rust 81 项 + 前端 18 项）。
 
